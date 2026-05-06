@@ -33,7 +33,10 @@ interface Props {
   onChange: (next: HouseInputs) => void;
 }
 
-const AVG_OCCUPANTS = 2.7;
+// Census averages by dwelling type — apartments are smaller households.
+// Used both as the default occupants and to label the "Avg" button.
+const AVG_OCCUPANTS_HOUSE = 2.7;
+const AVG_OCCUPANTS_APARTMENT = 1.71;
 const AVG_VEHICLES = 1.8;
 const OCCUPANT_INTS = [1, 2, 3, 4, 5];
 const VEHICLE_INTS = [0, 1, 2, 3];
@@ -95,6 +98,27 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     set("vehicleOption", toVehicleOption(vClass, next));
   };
 
+  // Apartments and houses have different census-average household sizes.
+  // The "Avg" button always shows the right average for the chosen dwelling
+  // and, if the user is currently sitting on the previous average, we update
+  // occupants in lock-step so the toggle stays selected on "Avg".
+  const avgOccupants =
+    value.dwelling === "apartment" ? AVG_OCCUPANTS_APARTMENT : AVG_OCCUPANTS_HOUSE;
+  const avgOccupantsLabel = `Avg (${avgOccupants.toFixed(1)})`;
+
+  const setDwelling = (next: DwellingType) => {
+    const wasOnAvg =
+      value.occupants === AVG_OCCUPANTS_HOUSE ||
+      value.occupants === AVG_OCCUPANTS_APARTMENT;
+    const newAvg =
+      next === "apartment" ? AVG_OCCUPANTS_APARTMENT : AVG_OCCUPANTS_HOUSE;
+    onChange({
+      ...value,
+      dwelling: next,
+      occupants: wasOnAvg ? newAvg : value.occupants,
+    });
+  };
+
   return (
     <Box
       sx={{
@@ -130,7 +154,7 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
           size="small"
           exclusive
           value={value.dwelling}
-          onChange={(_, v: DwellingType | null) => v && set("dwelling", v)}
+          onChange={(_, v: DwellingType | null) => v && setDwelling(v)}
           sx={groupSx}
         >
           <ToggleButton value="house">House</ToggleButton>
@@ -146,7 +170,7 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
           onChange={(_, v: number | null) => v !== null && set("occupants", v)}
           sx={groupSx}
         >
-          <ToggleButton value={AVG_OCCUPANTS}>Avg (2.7)</ToggleButton>
+          <ToggleButton value={avgOccupants}>{avgOccupantsLabel}</ToggleButton>
           {OCCUPANT_INTS.map((n) => (
             <ToggleButton key={n} value={n}>
               {n}
