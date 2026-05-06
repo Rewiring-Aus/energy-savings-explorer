@@ -11,6 +11,7 @@ import {
   ApplianceOption,
   APPLIANCE_OPTIONS,
   HouseInputs,
+  SolarScenario,
   availableOptions,
   evaluateSingleOption,
 } from "src/comparison/model";
@@ -37,23 +38,50 @@ function efficientElectricValue(category: ApplianceCategory): string {
   }
 }
 
-// Display labels for the fossil options included in the savings box.
+// Display name for the efficient electric option, used in the savings headline
+// (e.g. "Heat pump savings vs gas hot water"). Kept short on purpose.
+const ELECTRIC_LABEL: Record<ApplianceCategory, string> = {
+  "Space Heating": "Heat pump",
+  "Water Heating": "Heat pump",
+  "Cooktop":       "Induction",
+  "Vehicles":      "EV",
+};
+
+// Noun used to describe the appliance/use in the savings headline, lower-case
+// so it composes cleanly after the fossil label.
+const CATEGORY_NOUN: Record<ApplianceCategory, string> = {
+  "Space Heating": "heating",
+  "Water Heating": "hot water",
+  "Cooktop":       "cooktop",
+  "Vehicles":      "car",
+};
+
+// Pretty label for each solar scenario, used by the chip in the savings box.
+const SCENARIO_LABEL: Record<SolarScenario, string> = {
+  grid_only:       "Grid only",
+  solar:           "Solar",
+  solar_optimised: "Solar optimised",
+};
+
+// Display labels for the fossil options included in the savings box. We list
+// gas first because LPG is filtered out when reticulated gas is available
+// (NT is the only state without gas — there it falls back to LPG).
 const FOSSIL_LABELS: Record<ApplianceCategory, { value: string; label: string }[]> = {
   "Space Heating": [
-    { value: "Natural gas", label: "Gas" },
+    { value: "Natural gas", label: "gas" },
     { value: "LPG",         label: "LPG" },
   ],
   "Water Heating": [
-    { value: "Natural gas", label: "Gas" },
+    { value: "Natural gas", label: "gas" },
     { value: "LPG",         label: "LPG" },
   ],
   Cooktop: [
-    { value: "Natural gas", label: "Gas" },
+    { value: "Natural gas", label: "gas" },
     { value: "LPG",         label: "LPG" },
   ],
   Vehicles: [
-    { value: "Petrol", label: "Petrol" },
-    { value: "Diesel", label: "Diesel" },
+    { value: "Petrol", label: "petrol" },
+    { value: "Diesel", label: "diesel" },
   ],
 };
 
@@ -61,13 +89,20 @@ function findOption(category: ApplianceCategory, value: string): ApplianceOption
   return APPLIANCE_OPTIONS[category].find((o) => o.value === value);
 }
 
+// Sub-$250 values round to the nearest $10 so small bars (e.g. running cost
+// of a cooktop) don't all collapse to the same printed figure even when the
+// bars visibly differ.
+function roundForDisplay(n: number): number {
+  const step = Math.abs(n) < 250 ? 10 : 100;
+  return Math.round(n / step) * step;
+}
+
 function formatMoney(n: number): string {
-  const rounded = Math.round(n / 100) * 100;
   return new Intl.NumberFormat("en-AU", {
     style: "currency",
     currency: "AUD",
     maximumFractionDigits: 0,
-  }).format(rounded);
+  }).format(roundForDisplay(n));
 }
 
 const groupSx = {
@@ -104,19 +139,45 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
   </Box>
 );
 
-interface SavingsLine { label: string; value: number; }
+interface SavingsLine {
+  fossilLabel: string;  // e.g. "gas", "LPG", "petrol"
+  value: number;        // fossil − electric (positive = electric saves money)
+}
+
+// Small chip (top-right of the green box) that names which solar scenario
+// these figures reflect. Without it the box reads as if the savings are
+// universal, which is misleading once a user has changed Scenario.
+const ScenarioChip: React.FC<{ scenario: SolarScenario }> = ({ scenario }) => (
+  <Box
+    sx={{
+      flex: "0 0 auto",
+      padding: "0.15rem 0.5rem",
+      backgroundColor: "#fff",
+      border: "1px solid #2e7d32",
+      borderRadius: "999px",
+      fontSize: "0.7rem",
+      fontWeight: 600,
+      color: "#1b5e20",
+      whiteSpace: "nowrap",
+      lineHeight: 1.4,
+    }}
+  >
+    {SCENARIO_LABEL[scenario]}
+  </Box>
+);
 
 const SavingsBox: React.FC<{
   category: ApplianceCategory;
   lines: SavingsLine[];
   noCar: boolean;
   years: number;
-}> = ({ category, lines, noCar, years }) => {
+  scenario: SolarScenario;
+}> = ({ category, lines, noCar, years, scenario }) => {
   if (category === "Vehicles" && noCar) {
     return (
       <Box
         sx={{
-          flex: { xs: "1 1 100%", md: "0 0 240px" },
+          flex: { xs: "1 1 100%", md: "0 0 260px" },
           padding: "1rem",
           backgroundColor: "#f5f4ee",
           border: "1px solid #d7d5cd",
@@ -124,9 +185,12 @@ const SavingsBox: React.FC<{
           alignSelf: "flex-start",
         }}
       >
-        <Typography variant="overline" sx={{ display: "block", lineHeight: 1.2 }}>
-          Savings vs fossil options
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, justifyContent: "space-between" }}>
+          <Typography variant="overline" sx={{ display: "block", lineHeight: 1.2 }}>
+            Savings
+          </Typography>
+          <ScenarioChip scenario={scenario} />
+        </Box>
         <Typography variant="body2" sx={{ mt: 1, color: "#666" }}>
           Pick a vehicle in Household settings to see savings.
         </Typography>
@@ -134,10 +198,13 @@ const SavingsBox: React.FC<{
     );
   }
 
+  const electricLabel = ELECTRIC_LABEL[category];
+  const noun = CATEGORY_NOUN[category];
+
   return (
     <Box
       sx={{
-        flex: { xs: "1 1 100%", md: "0 0 240px" },
+        flex: { xs: "1 1 100%", md: "0 0 260px" },
         padding: "1rem",
         backgroundColor: "#e8f5e9",
         border: "2px solid #2e7d32",
@@ -145,19 +212,23 @@ const SavingsBox: React.FC<{
         alignSelf: "flex-start",
       }}
     >
-      <Typography
-        variant="overline"
-        sx={{ display: "block", lineHeight: 1.2, color: "#1b5e20" }}
-      >
-        Savings vs fossil options
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, justifyContent: "space-between" }}>
+        <Typography
+          variant="overline"
+          sx={{ lineHeight: 1.2, color: "#1b5e20" }}
+        >
+          Savings
+        </Typography>
+        <ScenarioChip scenario={scenario} />
+      </Box>
       {lines.map((line) => {
         const positive = line.value > 0;
         const fg = positive ? "#1b5e20" : "#b71c1c";
+        const verb = positive ? "savings" : "extra cost";
         return (
-          <Box key={line.label} sx={{ mt: 1 }}>
+          <Box key={line.fossilLabel} sx={{ mt: 1 }}>
             <Typography variant="caption" sx={{ display: "block", color: fg }}>
-              {positive ? "Save" : "Extra cost"} vs {line.label}
+              {electricLabel} {verb} vs {line.fossilLabel} {noun}
               {years > 1 ? ` over ${years} years` : ""}
             </Typography>
             <Typography
@@ -205,25 +276,35 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
   const savingsLines = useMemo<SavingsLine[]>(() => {
     const electricOpt = findOption(category, efficientElectricValue(category));
     if (!electricOpt) return [];
-    const electricCost = evaluateSingleOption(baseInputs, {
+    // Difference of *displayed* (rounded) totals, not the rounded difference.
+    // Otherwise the savings figure can disagree with the on-bar totals by
+    // tens of dollars and confuse readers who do the subtraction themselves.
+    const electricCost = roundForDisplay(evaluateSingleOption(baseInputs, {
       category,
       option: electricOpt,
       period,
       includeCapex: true,
-    }).total;
+    }).total);
+    // For appliance categories, only show LPG when reticulated gas isn't an
+    // option in this state (i.e. NT). Otherwise gas already represents the
+    // dominant fossil baseline and LPG would just be visual noise.
+    const gasAvailable = options.some((o) => o.value === "Natural gas");
     const lines: SavingsLine[] = [];
     for (const f of FOSSIL_LABELS[category]) {
       const fossilOpt = findOption(category, f.value);
       if (!fossilOpt) continue;
-      // Skip gas options where the state has no reticulated gas.
+      // Skip options not available for the state (e.g. gas in NT).
       if (!options.some((o) => o.value === f.value)) continue;
-      const fossilCost = evaluateSingleOption(baseInputs, {
+      // Hide LPG when gas is shown — keeps the box focused on the headline
+      // comparison. Vehicles aren't affected (no LPG entry).
+      if (f.value === "LPG" && gasAvailable) continue;
+      const fossilCost = roundForDisplay(evaluateSingleOption(baseInputs, {
         category,
         option: fossilOpt,
         period,
         includeCapex: true,
-      }).total;
-      lines.push({ label: f.label, value: fossilCost - electricCost });
+      }).total);
+      lines.push({ fossilLabel: f.label, value: fossilCost - electricCost });
     }
     return lines;
   }, [category, baseInputs, period, options]);
@@ -291,7 +372,13 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
           )}
         </Box>
 
-        <SavingsBox category={category} lines={savingsLines} noCar={noCar} years={years} />
+        <SavingsBox
+          category={category}
+          lines={savingsLines}
+          noCar={noCar}
+          years={years}
+          scenario={baseInputs.solarScenario}
+        />
       </Box>
 
       <Box sx={{ mt: 2 }}>

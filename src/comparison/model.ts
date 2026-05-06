@@ -5,10 +5,12 @@ import {
   APARTMENT_ENERGY_FACTOR,
   APPLIANCE_CAPEX,
   ENERGY_USE,
+  FIT_BY_STATE,
   Fuel,
   FUEL_PRICES,
   KM_PER_DAY,
   OTHER_ELEC_KWH_DAY,
+  SOLAR_LCOE_BY_STATE,
   STATES,
   StateCode,
   VEHICLE_CAPEX_NEW,
@@ -26,9 +28,13 @@ export type SolarScenario = "grid_only" | "solar" | "solar_optimised";
 // Per-appliance share of electricity met directly from on-site solar, keyed
 // by household scenario. Mirrors energy_savings_model.R SOLAR_FRACTION_TABLE.
 // "other" covers lighting/fridge/electronics — assumed 0% (poor daytime overlap).
+// "waterHeatingResistance" is the appliance-type override row in R: electric
+// tank has narrower solar overlap than heat pump (shorter, evening-skewed
+// draws) but responds well to a timer under load-shifting.
 interface SolarFractionByAppliance {
   spaceHeating: number;
-  waterHeating: number;
+  waterHeating: number;             // heat pump (default row in R)
+  waterHeatingResistance: number;   // override for "Electric resistance"
   spaceCooling: number;
   cooktop: number;
   vehicles: number;
@@ -36,9 +42,9 @@ interface SolarFractionByAppliance {
 }
 
 export const SOLAR_FRACTION_BY_SCENARIO: Record<SolarScenario, SolarFractionByAppliance> = {
-  grid_only:       { spaceHeating: 0,    waterHeating: 0,    spaceCooling: 0,    cooktop: 0,    vehicles: 0,    other: 0 },
-  solar:           { spaceHeating: 0.15, waterHeating: 0.50, spaceCooling: 0.40, cooktop: 0.10, vehicles: 0.20, other: 0 },
-  solar_optimised: { spaceHeating: 0.30, waterHeating: 0.85, spaceCooling: 0.65, cooktop: 0.10, vehicles: 0.45, other: 0 },
+  grid_only:       { spaceHeating: 0,    waterHeating: 0,    waterHeatingResistance: 0,    spaceCooling: 0,    cooktop: 0,    vehicles: 0,    other: 0 },
+  solar:           { spaceHeating: 0.15, waterHeating: 0.50, waterHeatingResistance: 0.30, spaceCooling: 0.40, cooktop: 0.10, vehicles: 0.20, other: 0 },
+  solar_optimised: { spaceHeating: 0.30, waterHeating: 0.85, waterHeatingResistance: 0.70, spaceCooling: 0.65, cooktop: 0.10, vehicles: 0.45, other: 0 },
 };
 
 // Solar system capex applied whenever scenario is "solar" or "solar_optimised".
@@ -111,6 +117,32 @@ function priceFor(state: StateCode, fuel: keyof NonNullable<(typeof FUEL_PRICES)
 
 function energy(category: string, type: string, state: StateCode): number {
   return ENERGY_USE[`${category}|${type}`]?.[state] ?? 0;
+}
+
+// Cost of self-consumed solar kWh.
+//
+// Two contexts call this:
+//
+// 1. Per-appliance comparisons (evaluateSingleOption) mirror R evaluate_option.
+//    The PV system isn't tracked in this view, so each self-consumed kWh is
+//    priced at LCOE + FiT — the kWh cost LCOE to generate, and using it
+//    internally forfeits the FiT we'd have earned exporting it. Pass
+//    includeLcoe=true.
+//
+// 2. Whole-house comparisons (evaluateAllElectricHouse / evaluateAllGasHouse)
+//    track the PV system capex separately via solarSystemCapex(), so the
+//    LCOE is already in the totals. Self-consumption only forfeits the FiT.
+//    Pass includeLcoe=false.
+function solarSelfConsumptionCost(
+  state: StateCode,
+  solarKwhDay: number,
+  years: number,
+  includeLcoe: boolean,
+): number {
+  if (solarKwhDay <= 0) return 0;
+  const fit = FIT_BY_STATE[state] ?? 0;
+  const lcoe = includeLcoe ? (SOLAR_LCOE_BY_STATE[state] ?? 0) : 0;
+  return solarKwhDay * 365 * (lcoe + fit) * years;
 }
 
 // Does this state have reticulated natural gas available?
@@ -206,10 +238,13 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   const petrolVolumeCost = iceKwhDay * 365 * petrolPrice.kwh * years;
   const elecVolumeCost   = gridElecKwhDay * 365 * elecPrice.kwh * years;
   const elecSupplyCost   = elecPrice.daily * days;
+  // Self-consumed solar is not free: it forfeits the FiT we'd have earned
+  // exporting. PV capex is tracked separately so we pass includeLcoe=false.
+  const solarOpportunityCost = solarSelfConsumptionCost(state, solarKwhDay, years, false);
 
   const gas         = gasVolumeCost + gasSupplyCost;
   const petrol      = petrolVolumeCost;
-  const electricity = elecVolumeCost + elecSupplyCost;
+  const electricity = elecVolumeCost + elecSupplyCost + solarOpportunityCost;
 
   const applianceCapex = fossilCapexHeating + fossilCapexWater + fossilCapexCooktop;
   const vehicleCapex   = vehicleCount > 0
@@ -267,6 +302,9 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
 
   const elecVolumeCost  = gridKwhDay * 365 * elecPrice.kwh * years;
   const elecSupplyCost  = elecPrice.daily * days;
+  // Self-consumed solar forfeits the FiT we'd have earned exporting. PV capex
+  // is tracked separately so we pass includeLcoe=false (avoids double-count).
+  const solarOpportunityCost = solarSelfConsumptionCost(state, solarKwhDay, years, false);
 
   const applianceCapex = APPLIANCE_CAPEX.spaceHeatingHeatPump +
                          APPLIANCE_CAPEX.waterHeatingHeatPump +
@@ -282,13 +320,14 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
     ? { capital: 0, interest: 0 }
     : computeCapitalAndInterest(totalCapex, inputs, years);
 
+  const electricity = elecVolumeCost + elecSupplyCost + solarOpportunityCost;
   return {
     capital,
     interest,
     gas: 0,
     petrol: 0,
-    electricity: elecVolumeCost + elecSupplyCost,
-    total: capital + interest + elecVolumeCost + elecSupplyCost,
+    electricity,
+    total: capital + interest + electricity,
   };
 }
 
@@ -410,10 +449,12 @@ export interface SingleOptionInputs {
 // Per-option unit assumptions for the "compare a single appliance" chart.
 // We're showing what a typical setup costs for one of each appliance, not a
 // whole household, so we assume:
-//   - Space heating: 2 heater units (most homes need more than one zone)
+//   - Resistive heaters: 2 units (small zone coverage; matches R model's
+//     n_units=2 on the resistance row in compare_space_heating())
+//   - All other heating types (gas, LPG, heat pump): 1 unit
 //   - Water heating / cooktop: 1 unit
 //   - Vehicles: 1 car (overrides the household's count)
-const HEATING_UNITS = 2;
+const RESISTIVE_HEATING_UNITS = 2;
 const SINGLE_OPTION_VEHICLE_COUNT = 1;
 
 export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInputs): HouseCost {
@@ -447,7 +488,11 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
     }
   }
 
-  // --- Volume cost (solar kWh priced at $0 for electric options) ---
+  // --- Volume cost ---
+  // Grid kWh priced at retail; self-consumed solar kWh priced at LCOE + FiT
+  // (mirrors R evaluate_option — kWh cost LCOE to generate and forfeits the
+  // FiT we'd have earned exporting). PV system capex is NOT tracked in this
+  // per-appliance view, so we include LCOE here.
   const price = priceFor(state, option.fuel, period);
   let solarKwhDay = 0;
   if (option.fuel === "electricity") {
@@ -458,7 +503,12 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
     } else if (category === "Space Heating") {
       solarKwhDay = energyKwhDay * frac.spaceHeating;
     } else if (category === "Water Heating") {
-      solarKwhDay = energyKwhDay * frac.waterHeating;
+      // Electric resistance hot water has a narrower solar overlap than
+      // heat pump (R model SOLAR_FRACTION_TABLE override row).
+      const wFrac = option.value === "Electric resistance"
+        ? frac.waterHeatingResistance
+        : frac.waterHeating;
+      solarKwhDay = energyKwhDay * wFrac;
     } else if (category === "Cooktop") {
       solarKwhDay = energyKwhDay * frac.cooktop;
     } else if (category === "Vehicles") {
@@ -466,7 +516,8 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
     }
   }
   const gridKwhDay = energyKwhDay - solarKwhDay;
-  const volumeCost = gridKwhDay * 365 * price.kwh * years;
+  const volumeCost = gridKwhDay * 365 * price.kwh * years
+    + solarSelfConsumptionCost(state, solarKwhDay, years, true);
 
   // --- Supply charge (proportional, per R) ---
   let gasSupply = 0;
@@ -501,8 +552,10 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
           ? VEHICLE_OPTION_DATA[vehicleOption].evCapex
           : VEHICLE_OPTION_DATA[vehicleOption].iceCapex;
       totalCapex = perUnit * SINGLE_OPTION_VEHICLE_COUNT;
-    } else if (category === "Space Heating") {
-      totalCapex = option.capex * HEATING_UNITS;
+    } else if (category === "Space Heating" && option.value === "Electric resistance") {
+      // Resistive heaters cover small zones, so households typically buy a
+      // pair (e.g. living + bedroom). Other heater types remain at 1 unit.
+      totalCapex = option.capex * RESISTIVE_HEATING_UNITS;
     } else {
       totalCapex = option.capex;
     }

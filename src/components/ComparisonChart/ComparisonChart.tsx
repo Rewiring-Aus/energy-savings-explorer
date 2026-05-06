@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, Typography, useTheme } from "@mui/material";
+import rough from "roughjs";
 import { HouseCost } from "src/comparison/model";
 
 export interface ChartBar {
@@ -38,14 +39,166 @@ const SEGMENT_LABELS = {
 type SegmentKey = keyof typeof SEGMENT_COLORS;
 const ORDER: SegmentKey[] = ["capital", "interest", "gas", "petrol", "electricity"];
 
+// Sub-$250 values round to the nearest $10 so small bars (e.g. annual
+// running cost of a cooktop) don't all collapse to the same printed figure.
+function roundForDisplay(n: number): number {
+  const step = Math.abs(n) < 250 ? 10 : 100;
+  return Math.round(n / step) * step;
+}
+
 function formatMoney(n: number): string {
-  const rounded = Math.round(n / 100) * 100;
   return new Intl.NumberFormat("en-AU", {
     style: "currency",
     currency: "AUD",
     maximumFractionDigits: 0,
-  }).format(rounded);
+  }).format(roundForDisplay(n));
 }
+
+// Stable hachure colour per segment key — keeps bars consistent between
+// renders (otherwise rough.js picks new random offsets every paint).
+const SEGMENT_SEED: Record<SegmentKey, number> = {
+  capital: 11,
+  interest: 23,
+  gas: 41,
+  petrol: 67,
+  electricity: 89,
+};
+
+interface RoughSegment {
+  key: SegmentKey;
+  value: number;
+  segPx: number;
+}
+
+interface HoverState {
+  label: string;
+  value: number;
+  x: number;
+  y: number;
+}
+
+// Renders a stacked bar as a single SVG using rough.js for the hand-drawn
+// hachured fills. The SVG is sized to the chart area (maxPx tall) and the
+// bars grow up from the bottom; segment labels are drawn as SVG <text>.
+// Each segment also gets a transparent hit-area rect that surfaces a hover
+// tooltip — important for thin segments where the inline label is suppressed.
+const RoughStackedBar: React.FC<{
+  segments: RoughSegment[];
+  totalPx: number;
+  maxPx: number;
+}> = ({ segments, totalPx, maxPx }) => {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [width, setWidth] = useState(0);
+  const [hover, setHover] = useState<HoverState | null>(null);
+
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setWidth(e.contentRect.width);
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || width <= 0) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const rc = rough.svg(svg);
+    const ns = "http://www.w3.org/2000/svg";
+
+    let y = maxPx;
+    for (const seg of segments) {
+      y -= seg.segPx;
+      const node = rc.rectangle(0, y, width, seg.segPx, {
+        fill: SEGMENT_COLORS[seg.key],
+        fillStyle: "hachure",
+        hachureGap: 3,
+        hachureAngle: 41,
+        fillWeight: 1.6,
+        roughness: 1.4,
+        stroke: "#222",
+        strokeWidth: 1.2,
+        seed: SEGMENT_SEED[seg.key],
+      });
+      svg.appendChild(node);
+      if (seg.segPx > 22) {
+        const text = document.createElementNS(ns, "text");
+        text.setAttribute("x", String(width / 2));
+        text.setAttribute("y", String(y + seg.segPx / 2));
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("dominant-baseline", "middle");
+        text.setAttribute("font-size", "12");
+        text.setAttribute("font-weight", "700");
+        text.setAttribute("fill", "#222");
+        // White halo behind the black glyphs — keeps the label legible on
+        // dark hachured fills without changing the black text colour.
+        text.setAttribute("stroke", "#fff");
+        text.setAttribute("stroke-width", "3");
+        text.setAttribute("stroke-linejoin", "round");
+        text.setAttribute("paint-order", "stroke fill");
+        text.style.pointerEvents = "none";
+        text.textContent = formatMoney(seg.value);
+        svg.appendChild(text);
+      }
+
+      // Transparent hit-area on top of the segment so hover works anywhere
+      // in the rectangle, not just on the hachure strokes themselves.
+      const hit = document.createElementNS(ns, "rect");
+      hit.setAttribute("x", "0");
+      hit.setAttribute("y", String(y));
+      hit.setAttribute("width", String(width));
+      hit.setAttribute("height", String(seg.segPx));
+      hit.setAttribute("fill", "transparent");
+      hit.style.cursor = "default";
+      const segLabel = SEGMENT_LABELS[seg.key];
+      const segValue = seg.value;
+      hit.addEventListener("mousemove", (e: MouseEvent) => {
+        const rect = wrapRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        setHover({
+          label: segLabel,
+          value: segValue,
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        });
+      });
+      hit.addEventListener("mouseleave", () => setHover(null));
+      svg.appendChild(hit);
+    }
+  }, [segments, totalPx, maxPx, width]);
+
+  return (
+    <Box
+      ref={wrapRef}
+      sx={{ width: "100%", maxWidth: 180, height: maxPx, position: "relative" }}
+    >
+      <svg ref={svgRef} width={width} height={maxPx} style={{ display: "block" }} />
+      {hover && (
+        <Box
+          sx={{
+            position: "absolute",
+            left: hover.x + 12,
+            top: hover.y + 12,
+            padding: "0.25rem 0.5rem",
+            backgroundColor: "#222",
+            color: "#fff",
+            borderRadius: 1,
+            fontSize: "0.75rem",
+            fontWeight: 600,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+            zIndex: 10,
+            boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+          }}
+        >
+          {hover.label}: {formatMoney(hover.value)}
+        </Box>
+      )}
+    </Box>
+  );
+};
 
 const Bar: React.FC<{
   label: string;
@@ -54,6 +207,10 @@ const Bar: React.FC<{
   maxPx: number;
 }> = ({ label, cost, maxTotal, maxPx }) => {
   const totalPx = maxTotal > 0 ? (cost.total / maxTotal) * maxPx : 0;
+  const segments: RoughSegment[] = ORDER
+    .map((key) => ({ key, value: cost[key as keyof HouseCost] as number }))
+    .filter((s) => s.value > 0)
+    .map((s) => ({ ...s, segPx: cost.total > 0 ? (s.value / cost.total) * totalPx : 0 }));
 
   return (
     <Box
@@ -72,49 +229,7 @@ const Bar: React.FC<{
       <Typography variant="h4" sx={{ m: 0, textAlign: "center" }}>
         {formatMoney(cost.total)}
       </Typography>
-      <Box
-        sx={{
-          width: "100%",
-          maxWidth: 180,
-          height: maxPx,
-          display: "flex",
-          flexDirection: "column",
-          border: "1px solid #d7d5cd",
-          borderRadius: 1,
-          overflow: "hidden",
-          backgroundColor: "#fff",
-        }}
-      >
-        <Box sx={{ flex: 1 }} />
-        <Box sx={{ height: totalPx, display: "flex", flexDirection: "column-reverse" }}>
-          {ORDER.map((key) => {
-            const value = cost[key as keyof HouseCost] as number;
-            if (value <= 0) return null;
-            const segPx = (value / cost.total) * totalPx;
-            const showLabel = segPx > 22;
-            return (
-              <Box
-                key={key}
-                sx={{
-                  height: `${segPx}px`,
-                  backgroundColor: SEGMENT_COLORS[key],
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: key === "electricity" ? "#222" : "#fff",
-                  fontSize: "0.75rem",
-                  fontWeight: 500,
-                  overflow: "hidden",
-                  whiteSpace: "nowrap",
-                  borderTop: "1px solid rgba(255,255,255,0.4)",
-                }}
-              >
-                {showLabel && formatMoney(value)}
-              </Box>
-            );
-          })}
-        </Box>
-      </Box>
+      <RoughStackedBar segments={segments} totalPx={totalPx} maxPx={maxPx} />
     </Box>
   );
 };
@@ -191,7 +306,11 @@ const ComparisonChart: React.FC<Props> = ({ title, bars, showSavingsBox, years =
   const chartHeight = 360;
 
   const showSavings = showSavingsBox === true && bars.length === 2;
-  const savings = showSavings ? bars[0].cost.total - bars[1].cost.total : 0;
+  // Savings = difference of *displayed* (rounded) totals, so the figure
+  // matches what the user sees on the bars.
+  const savings = showSavings
+    ? roundForDisplay(bars[0].cost.total) - roundForDisplay(bars[1].cost.total)
+    : 0;
 
   return (
     <Box

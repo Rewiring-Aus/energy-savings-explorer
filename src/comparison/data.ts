@@ -217,6 +217,41 @@ export const FUEL_PRICES: Record<StateCode, Partial<Record<Fuel, FuelPrice>>> = 
 };
 
 // ---------------------------------------------------------------------------
+// solar_lcoe_by_state.csv — levelised cost ($/kWh) of self-generated solar.
+// Uses the 8.8% interest-rate row (typical green-loan rate, matches R model
+// SOLAR_LCOE_INTEREST_RATE = "8.8%").
+// ---------------------------------------------------------------------------
+
+export const SOLAR_LCOE_BY_STATE: Record<StateCode, number> = {
+  AUS: 0.0401,   // "AUS (pop-weighted)" row in CSV
+  NSW: 0.0382,
+  VIC: 0.0466,
+  QLD: 0.0350,
+  SA:  0.0400,
+  WA:  0.0346,
+  TAS: 0.0625,
+  ACT: 0.0356,
+  NT:  0.0498,
+};
+
+// ---------------------------------------------------------------------------
+// fuel_prices_by_state_simple.csv — "solar_export" rows: feed-in tariff ($/kWh).
+// FiT is held flat over time, so 1-year and 15-year values are identical.
+// ---------------------------------------------------------------------------
+
+export const FIT_BY_STATE: Record<StateCode, number> = {
+  AUS: 0.0346,
+  NSW: 0.05,
+  VIC: 0.02,
+  QLD: 0.03,
+  SA:  0.03,
+  WA:  0.02,
+  TAS: 0.0878,
+  ACT: 0.04,
+  NT:  0.0933,
+};
+
+// ---------------------------------------------------------------------------
 // energy_consumption_scaling_factors.csv
 // ---------------------------------------------------------------------------
 

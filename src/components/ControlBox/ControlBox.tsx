@@ -53,10 +53,11 @@ const groupSx = {
   },
 };
 
-const Section: React.FC<{ label: string; children: React.ReactNode }> = ({
-  label,
-  children,
-}) => (
+const Section: React.FC<{
+  label: string;
+  helperText?: string;
+  children: React.ReactNode;
+}> = ({ label, helperText, children }) => (
   <Box sx={{ mb: 1.5 }}>
     <Typography
       variant="overline"
@@ -67,6 +68,13 @@ const Section: React.FC<{ label: string; children: React.ReactNode }> = ({
     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
       {children}
     </Box>
+    {helperText && (
+      <Typography
+        sx={{ display: "block", fontSize: "0.72rem", color: "#666", mt: 0.5, lineHeight: 1.3 }}
+      >
+        {helperText}
+      </Typography>
+    )}
   </Box>
 );
 
@@ -228,7 +236,10 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
         </ToggleButtonGroup>
       </Section>
 
-      <Section label="Solar">
+      <Section
+        label="Scenario"
+        helperText="The solar scenario models a house with solar but no timers or optimisation"
+      >
         <ToggleButtonGroup
           size="small"
           exclusive
