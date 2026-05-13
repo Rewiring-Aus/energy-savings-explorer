@@ -27,7 +27,15 @@ export const STATE_LABELS: Record<StateCode, string> = {
   NT: "NT",
 };
 
-export type Fuel = "electricity" | "gas" | "lpg" | "wood" | "petrol" | "diesel";
+export type Fuel =
+  | "electricity"
+  | "electricity_off_peak"
+  | "ev_fast_charge"
+  | "gas"
+  | "lpg"
+  | "wood"
+  | "petrol"
+  | "diesel";
 
 // ---------------------------------------------------------------------------
 // average_energy_use_by_appliance_and_state.csv (kWh/day)
@@ -131,13 +139,38 @@ export const VEHICLE_EFFICIENCY_WH_KM: Record<VehicleClass, { electric: number; 
 };
 
 // ---------------------------------------------------------------------------
-// average_km_per_day_by_state.csv
+// average_km_per_day_by_state.csv — three driving levels per state.
+// "middle" is the state average (canonical R default); "low" / "high" are
+// 60% / 140% of middle (matches the columns in the CSV).
 // ---------------------------------------------------------------------------
 
-export const KM_PER_DAY: Record<StateCode, number> = {
-  AUS: 36.4, NSW: 36.2, ACT: 35.1, NT: 35.9, QLD: 36.9,
-  SA: 35.0, TAS: 33.1, VIC: 38.0, WA: 33.8,
+export type DrivingLevel = "low" | "middle" | "high";
+
+export const DRIVING_LEVELS: DrivingLevel[] = ["low", "middle", "high"];
+
+// Labels reflect typical km-per-week ranges that map onto the three CSV
+// columns (low ≈ 150 km/wk, middle ≈ 250 km/wk, high ≈ 350 km/wk for AUS).
+export const DRIVING_LEVEL_LABELS: Record<DrivingLevel, string> = {
+  low: "100–200",
+  middle: "200–300",
+  high: "300+",
 };
+
+export const KM_PER_DAY_BY_LEVEL: Record<StateCode, Record<DrivingLevel, number>> = {
+  AUS: { low: 21.84, middle: 36.4,  high: 50.96 },
+  NSW: { low: 21.72, middle: 36.2,  high: 50.68 },
+  ACT: { low: 21.06, middle: 35.1,  high: 49.14 },
+  NT:  { low: 21.54, middle: 35.9,  high: 50.26 },
+  QLD: { low: 22.14, middle: 36.9,  high: 51.66 },
+  SA:  { low: 21.0,  middle: 35.0,  high: 49.0 },
+  TAS: { low: 19.86, middle: 33.1,  high: 46.34 },
+  VIC: { low: 22.8,  middle: 38.0,  high: 53.2 },
+  WA:  { low: 20.28, middle: 33.8,  high: 47.32 },
+};
+
+export function kmPerDay(state: StateCode, level: DrivingLevel): number {
+  return KM_PER_DAY_BY_LEVEL[state][level];
+}
 
 // ---------------------------------------------------------------------------
 // fuel_prices_by_state_simple.csv
@@ -152,69 +185,93 @@ export interface FuelPrice {
 
 export const FUEL_PRICES: Record<StateCode, Partial<Record<Fuel, FuelPrice>>> = {
   AUS: {
-    electricity: { current: 0.3403, forecast15yr: 0.3980, dailyToday: 1.3308, daily15yr: 1.5567 },
-    gas:         { current: 0.1968, forecast15yr: 0.2458, dailyToday: 0.7396, daily15yr: 0.9238 },
-    lpg:         { current: 0.2542, forecast15yr: 0.3175, dailyToday: 0.2948, daily15yr: 0.3682 },
-    petrol:      { current: 0.1896, forecast15yr: 0.2139, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1734, forecast15yr: 0.1957, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.3403, forecast15yr: 0.3980, dailyToday: 1.3308, daily15yr: 1.5567 },
+    electricity_off_peak: { current: 0.2603, forecast15yr: 0.3045, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.1968, forecast15yr: 0.2458, dailyToday: 0.7396, daily15yr: 0.9238 },
+    lpg:                  { current: 0.2542, forecast15yr: 0.3175, dailyToday: 0.2948, daily15yr: 0.3682 },
+    petrol:               { current: 0.1896, forecast15yr: 0.2139, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1734, forecast15yr: 0.1957, dailyToday: 0,      daily15yr: 0 },
   },
   NSW: {
-    electricity: { current: 0.3788, forecast15yr: 0.4431, dailyToday: 1.3905, daily15yr: 1.6265 },
-    gas:         { current: 0.1526, forecast15yr: 0.1906, dailyToday: 0.7228, daily15yr: 0.9028 },
-    lpg:         { current: 0.2743, forecast15yr: 0.3426, dailyToday: 0.2841, daily15yr: 0.3549 },
-    petrol:      { current: 0.1899, forecast15yr: 0.2143, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1728, forecast15yr: 0.1950, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.3788, forecast15yr: 0.4431, dailyToday: 1.3905, daily15yr: 1.6265 },
+    electricity_off_peak: { current: 0.2841, forecast15yr: 0.3323, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.1526, forecast15yr: 0.1906, dailyToday: 0.7228, daily15yr: 0.9028 },
+    lpg:                  { current: 0.2743, forecast15yr: 0.3426, dailyToday: 0.2841, daily15yr: 0.3549 },
+    petrol:               { current: 0.1899, forecast15yr: 0.2143, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1728, forecast15yr: 0.1950, dailyToday: 0,      daily15yr: 0 },
   },
   VIC: {
-    electricity: { current: 0.2884, forecast15yr: 0.3373, dailyToday: 1.1780, daily15yr: 1.3779 },
-    gas:         { current: 0.1304, forecast15yr: 0.1629, dailyToday: 0.8927, daily15yr: 1.1150 },
-    lpg:         { current: 0.2271, forecast15yr: 0.2837, dailyToday: 0.3082, daily15yr: 0.3850 },
-    petrol:      { current: 0.1897, forecast15yr: 0.2140, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1743, forecast15yr: 0.1967, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.2884, forecast15yr: 0.3373, dailyToday: 1.1780, daily15yr: 1.3779 },
+    electricity_off_peak: { current: 0.2327, forecast15yr: 0.2722, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.1304, forecast15yr: 0.1629, dailyToday: 0.8927, daily15yr: 1.1150 },
+    lpg:                  { current: 0.2271, forecast15yr: 0.2837, dailyToday: 0.3082, daily15yr: 0.3850 },
+    petrol:               { current: 0.1897, forecast15yr: 0.2140, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1743, forecast15yr: 0.1967, dailyToday: 0,      daily15yr: 0 },
   },
   QLD: {
-    electricity: { current: 0.3333, forecast15yr: 0.3899, dailyToday: 1.5959, daily15yr: 1.8667 },
-    gas:         { current: 0.2065, forecast15yr: 0.2579, dailyToday: 0.7051, daily15yr: 0.8807 },
-    lpg:         { current: 0.2425, forecast15yr: 0.3029, dailyToday: 0.2975, daily15yr: 0.3716 },
-    petrol:      { current: 0.1928, forecast15yr: 0.2175, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1741, forecast15yr: 0.1964, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.3333, forecast15yr: 0.3899, dailyToday: 1.5959, daily15yr: 1.8667 },
+    electricity_off_peak: { current: 0.2577, forecast15yr: 0.3014, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.2065, forecast15yr: 0.2579, dailyToday: 0.7051, daily15yr: 0.8807 },
+    lpg:                  { current: 0.2425, forecast15yr: 0.3029, dailyToday: 0.2975, daily15yr: 0.3716 },
+    petrol:               { current: 0.1928, forecast15yr: 0.2175, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1741, forecast15yr: 0.1964, dailyToday: 0,      daily15yr: 0 },
   },
   SA: {
-    electricity: { current: 0.4376, forecast15yr: 0.5119, dailyToday: 1.2228, daily15yr: 1.4303 },
-    gas:         { current: 0.1885, forecast15yr: 0.2354, dailyToday: 0.8521, daily15yr: 1.0643 },
-    lpg:         { current: 0.2515, forecast15yr: 0.3141, dailyToday: 0.3044, daily15yr: 0.3802 },
-    petrol:      { current: 0.1839, forecast15yr: 0.2075, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1722, forecast15yr: 0.1943, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.4376, forecast15yr: 0.5119, dailyToday: 1.2228, daily15yr: 1.4303 },
+    electricity_off_peak: { current: 0.3252, forecast15yr: 0.3804, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.1885, forecast15yr: 0.2354, dailyToday: 0.8521, daily15yr: 1.0643 },
+    lpg:                  { current: 0.2515, forecast15yr: 0.3141, dailyToday: 0.3044, daily15yr: 0.3802 },
+    petrol:               { current: 0.1839, forecast15yr: 0.2075, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1722, forecast15yr: 0.1943, dailyToday: 0,      daily15yr: 0 },
   },
   WA: {
-    electricity: { current: 0.3237, forecast15yr: 0.3786, dailyToday: 1.1605, daily15yr: 1.3574 },
-    gas:         { current: 0.4968, forecast15yr: 0.6205, dailyToday: 0.3903, daily15yr: 0.4875 },
-    lpg:         { current: 0.2840, forecast15yr: 0.3547, dailyToday: 0.2685, daily15yr: 0.3354 },
-    petrol:      { current: 0.1848, forecast15yr: 0.2085, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1710, forecast15yr: 0.1929, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.3237, forecast15yr: 0.3786, dailyToday: 1.1605, daily15yr: 1.3574 },
+    electricity_off_peak: { current: 0.2369, forecast15yr: 0.2771, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.4968, forecast15yr: 0.6205, dailyToday: 0.3903, daily15yr: 0.4875 },
+    lpg:                  { current: 0.2840, forecast15yr: 0.3547, dailyToday: 0.2685, daily15yr: 0.3354 },
+    petrol:               { current: 0.1848, forecast15yr: 0.2085, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1710, forecast15yr: 0.1929, dailyToday: 0,      daily15yr: 0 },
   },
   TAS: {
-    electricity: { current: 0.2789, forecast15yr: 0.3262, dailyToday: 1.3486, daily15yr: 1.5775 },
-    gas:         { current: 0.1867, forecast15yr: 0.2332, dailyToday: 0.7139, daily15yr: 0.8917 },
-    lpg:         { current: 0.2433, forecast15yr: 0.3039, dailyToday: 0.3592, daily15yr: 0.4487 },
-    petrol:      { current: 0.1892, forecast15yr: 0.2135, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1737, forecast15yr: 0.1960, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.2789, forecast15yr: 0.3262, dailyToday: 1.3486, daily15yr: 1.5775 },
+    electricity_off_peak: { current: 0.1669, forecast15yr: 0.1952, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.1867, forecast15yr: 0.2332, dailyToday: 0.7139, daily15yr: 0.8917 },
+    lpg:                  { current: 0.2433, forecast15yr: 0.3039, dailyToday: 0.3592, daily15yr: 0.4487 },
+    petrol:               { current: 0.1892, forecast15yr: 0.2135, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1737, forecast15yr: 0.1960, dailyToday: 0,      daily15yr: 0 },
   },
   ACT: {
-    electricity: { current: 0.3127, forecast15yr: 0.3658, dailyToday: 1.2741, daily15yr: 1.4903 },
-    gas:         { current: 0.1486, forecast15yr: 0.1856, dailyToday: 0.7630, daily15yr: 0.9530 },
-    lpg:         { current: 0.2588, forecast15yr: 0.3233, dailyToday: 0.2841, daily15yr: 0.3549 },
-    petrol:      { current: 0.1899, forecast15yr: 0.2143, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1728, forecast15yr: 0.1950, dailyToday: 0,      daily15yr: 0 },
+    electricity:          { current: 0.3127, forecast15yr: 0.3658, dailyToday: 1.2741, daily15yr: 1.4903 },
+    electricity_off_peak: { current: 0.2841, forecast15yr: 0.3323, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
+    gas:                  { current: 0.1486, forecast15yr: 0.1856, dailyToday: 0.7630, daily15yr: 0.9530 },
+    lpg:                  { current: 0.2588, forecast15yr: 0.3233, dailyToday: 0.2841, daily15yr: 0.3549 },
+    petrol:               { current: 0.1899, forecast15yr: 0.2143, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1728, forecast15yr: 0.1950, dailyToday: 0,      daily15yr: 0 },
   },
   NT: {
-    electricity: { current: 0.3008, forecast15yr: 0.3518, dailyToday: 0.5931, daily15yr: 0.6937 },
+    electricity:          { current: 0.3008, forecast15yr: 0.3518, dailyToday: 0.5931, daily15yr: 0.6937 },
+    electricity_off_peak: { current: 0.2453, forecast15yr: 0.2869, dailyToday: 0,      daily15yr: 0 },
+    ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
     // No reticulated natural gas in NT
-    lpg:         { current: 0.3198, forecast15yr: 0.3994, dailyToday: 0.2923, daily15yr: 0.3651 },
-    petrol:      { current: 0.2071, forecast15yr: 0.2337, dailyToday: 0,      daily15yr: 0 },
-    diesel:      { current: 0.1941, forecast15yr: 0.2190, dailyToday: 0,      daily15yr: 0 },
+    lpg:                  { current: 0.3198, forecast15yr: 0.3994, dailyToday: 0.2923, daily15yr: 0.3651 },
+    petrol:               { current: 0.2071, forecast15yr: 0.2337, dailyToday: 0,      daily15yr: 0 },
+    diesel:               { current: 0.1941, forecast15yr: 0.2190, dailyToday: 0,      daily15yr: 0 },
   },
 };
+
+// Fraction of total EV energy obtained at DC fast chargers (Econnex 2025).
+// Fast-charged kWh: priced at ev_fast_charge, not eligible for solar, NOT in
+// the home electricity supply-charge denominator. The remaining (1 - this)
+// is home charging at the off-peak rate above.
+export const FAST_CHARGE_FRACTION = 0.15;
 
 // ---------------------------------------------------------------------------
 // solar_lcoe_by_state.csv — levelised cost ($/kWh) of self-generated solar.
@@ -285,6 +342,132 @@ export function getScalingFactor(n: number): number {
 // ---------------------------------------------------------------------------
 
 export const APARTMENT_ENERGY_FACTOR = 0.79;
+
+// ---------------------------------------------------------------------------
+// Solar + battery sizing & costs — sourced from
+//   Tipping point 2026 - input data - FINAL product prices.csv
+//   solar_lcoe_by_state.csv          (capacity factor → daily kWh per kW)
+//   evening_peak_prices_annual.csv    (median wholesale 4–8 pm price)
+// ---------------------------------------------------------------------------
+
+// Solar PV cost ($/kW installed) — varies by state (Tipping point CSV).
+export const SOLAR_PV_COST_PER_KW: Record<StateCode, number> = {
+  AUS: 864, ACT: 780, NSW: 815, NT: 1496, QLD: 886,
+  SA: 872, TAS: 1098, VIC: 872, WA: 851,
+};
+
+// Solar generation per kW per day, derived from the per-state capacity factor
+// in solar_lcoe_by_state.csv (capacity_factor × 24 h). Year-1 figures —
+// matches the 0.04 first-year degradation default in battery_model.R.
+export const SOLAR_DAILY_KWH_PER_KW: Record<StateCode, number> = {
+  AUS: 4.39, NSW: 4.31, ACT: 4.45, NT:  5.78, QLD: 5.07,
+  SA:  4.38, TAS: 3.45, VIC: 3.76, WA:  4.95,
+};
+
+// One-off battery installation cost (per Tipping point CSV, row "Battery installation").
+export const BATTERY_INSTALLATION_COST = 2300;
+
+// Battery hardware cost per kWh — subsidised value (post-rebate).
+// Unsubsidised list price would be $940/kWh.
+export const BATTERY_COST_PER_KWH = 620;
+
+// VPP annual benefit ($) — flat payment from VPP participation
+// (Tipping point CSV, row "VPP annual benefit").
+export const VPP_ANNUAL_BENEFIT = 400;
+
+// Seasonal evening-peak ($/kWh) by state — four hourly tiers (4-8 pm) across
+// the four Australian seasons. Built from evening_peak_prices_monthly.csv by
+// averaging peak_hour_1..4 over the months in each season (summer = Dec/Jan/
+// Feb, autumn = Mar/Apr/May, winter = Jun/Jul/Aug, spring = Sep/Oct/Nov).
+// Used by the tiered headroom valuation in "Wholesale" mode: the household's
+// inverter capacity sets the per-hour cap on exports, so the first inverter_kw
+// kWh earn hour 1's price, the next inverter_kw earn hour 2's price, etc.
+// States missing from the monthly CSV (AUS, NT, ACT) fall back to "National".
+export type Season = "summer" | "autumn" | "winter" | "spring";
+export const SEASONS: Season[] = ["summer", "autumn", "winter", "spring"];
+
+// One row of peak_hour_1..4_kwh prices ($/kWh).
+export type PeakTierPrices = readonly [number, number, number, number];
+
+const NATIONAL_SEASONAL_PEAK: Record<Season, PeakTierPrices> = {
+  summer: [0.111199, 0.082917, 0.059692, 0.043643],
+  autumn: [0.133191, 0.112397, 0.084942, 0.061245],
+  winter: [0.178779, 0.142599, 0.111791, 0.084050],
+  spring: [0.116882, 0.079282, 0.048200, 0.026896],
+};
+
+export const SEASONAL_PEAK_PRICES: Record<StateCode, Record<Season, PeakTierPrices>> = {
+  AUS: NATIONAL_SEASONAL_PEAK,
+  NSW: {
+    summer: [0.085041, 0.060187, 0.034026, 0.024593],
+    autumn: [0.128257, 0.108848, 0.068151, 0.043985],
+    winter: [0.186013, 0.141268, 0.104075, 0.066294],
+    spring: [0.115813, 0.068006, 0.025820, 0.010120],
+  },
+  VIC: {
+    summer: [0.059178, 0.043675, 0.024563, 0.008345],
+    autumn: [0.115115, 0.097146, 0.073922, 0.045906],
+    winter: [0.169191, 0.139783, 0.108664, 0.081080],
+    spring: [0.085946, 0.061950, 0.032012, 0.011707],
+  },
+  QLD: {
+    summer: [0.083542, 0.059984, 0.031265, 0.021804],
+    autumn: [0.123579, 0.103266, 0.055248, 0.030815],
+    winter: [0.168917, 0.128348, 0.069669, 0.033213],
+    spring: [0.099977, 0.048594, 0.010772, -0.001378],
+  },
+  SA: {
+    summer: [0.147395, 0.081491, 0.036998, 0.005319],
+    autumn: [0.134691, 0.111666, 0.087245, 0.053968],
+    winter: [0.208182, 0.142743, 0.113576, 0.084026],
+    spring: [0.097298, 0.070937, 0.038684, 0.012105],
+  },
+  WA: {
+    summer: [0.152133, 0.123514, 0.104266, 0.085004],
+    autumn: [0.160292, 0.132188, 0.117137, 0.101717],
+    winter: [0.166914, 0.148936, 0.137487, 0.120276],
+    spring: [0.192175, 0.143918, 0.113107, 0.080731],
+  },
+  TAS: {
+    summer: [0.098968, 0.088055, 0.082457, 0.075430],
+    autumn: [0.129230, 0.116275, 0.103731, 0.086293],
+    winter: [0.173458, 0.154518, 0.137275, 0.119410],
+    spring: [0.054688, 0.041881, 0.032000, 0.021156],
+  },
+  ACT: NATIONAL_SEASONAL_PEAK,
+  NT:  NATIONAL_SEASONAL_PEAK,
+};
+
+// Inverter capacity (kW) caps each hour's exportable kWh during the four-hour
+// evening peak. Small/mid residential systems (≤ ~6.6 kWp) typically run a
+// 5 kW inverter; ≥ 10 kWp systems usually have a 10 kW inverter and can push
+// 10 kWh into each peak hour.
+export const INVERTER_KW = 5;
+export const LARGE_SYSTEM_INVERTER_KW = 10;
+export const LARGE_SYSTEM_SOLAR_KWP = 10;
+
+// Solar + battery sizes offered in the UI single-appliance toggle.
+export const SOLAR_KW_OPTIONS = [6.6, 10, 15] as const;
+export type SolarSizeKw = (typeof SOLAR_KW_OPTIONS)[number];
+
+export const BATTERY_KWH_OPTIONS = [12, 20, 40] as const;
+export type BatterySizeKwh = (typeof BATTERY_KWH_OPTIONS)[number];
+
+// Battery model parameters (battery_model.R)
+export const BATTERY_ROUND_TRIP_EFFICIENCY = 0.90;
+export const BATTERY_HOUSEHOLD_SAFEGUARD_PCT = 0.20;
+export const BATTERY_USEABLE_CAPACITY_PCT = 0.90;
+export const BATTERY_DEGRADATION_1YR = 0.04;
+export const BATTERY_DEGRADATION_15YR_AVG = 0.022;
+export const BATTERY_MIN_GRID_PCT = 0.10;
+
+// Relative solar generation by season (battery_model.R seasonal weights).
+export const SEASONAL_SOLAR_WEIGHTS = {
+  spring: 2,
+  summer: 3,
+  autumn: 2,
+  winter: 1,
+} as const;
 
 // ---------------------------------------------------------------------------
 // vehicle_costs_2026.csv — weighted avg base price by class & new/used,
