@@ -1,11 +1,5 @@
 import React from "react";
-import {
-  Box,
-  ToggleButton,
-  ToggleButtonGroup,
-  Typography,
-  useTheme,
-} from "@mui/material";
+import { Box, MenuItem, Select, Typography, useTheme } from "@mui/material";
 import {
   DwellingType,
   HouseInputs,
@@ -13,6 +7,9 @@ import {
   SolarScenario,
 } from "src/comparison/model";
 import {
+  DRIVING_LEVELS,
+  DRIVING_LEVEL_LABELS,
+  DrivingLevel,
   STATES,
   StateCode,
   STATE_LABELS,
@@ -34,52 +31,81 @@ interface Props {
 }
 
 // Census averages by dwelling type — apartments are smaller households.
-// Used both as the default occupants and to label the "Avg" button.
 const AVG_OCCUPANTS_HOUSE = 2.7;
-const AVG_OCCUPANTS_APARTMENT = 1.71;
+const AVG_OCCUPANTS_APARTMENT = 1.86;
 const AVG_VEHICLES = 1.8;
 const OCCUPANT_INTS = [1, 2, 3, 4, 5];
 const VEHICLE_INTS = [0, 1, 2, 3];
 
-const groupSx = {
-  flexWrap: "wrap",
-  "& .MuiToggleButton-root": {
-    textTransform: "none",
-    padding: "0.25rem 0.6rem",
-    fontSize: "0.8rem",
-    borderColor: "#d7d5cd",
-    "&.Mui-selected": {
-      backgroundColor: "#222222",
-      color: "#fff",
-      "&:hover": { backgroundColor: "#000" },
-    },
+// Inline "handwritten" dropdown that sits inside a sentence. The Select is
+// rendered as a coloured pill with a cursive font so the choices read as if
+// they were scribbled into the gaps of a story.
+const HANDWRITTEN_COLOR = "#c2410c";  // warm rust orange
+const HANDWRITTEN_FONT = '"Caveat", "Patrick Hand", "Comic Sans MS", cursive';
+
+const inlineSelectSx = {
+  fontFamily: HANDWRITTEN_FONT,
+  fontSize: "1.45rem",
+  lineHeight: 1,
+  color: HANDWRITTEN_COLOR,
+  fontWeight: 700,
+  backgroundColor: "#fffaf3",
+  border: `2px solid ${HANDWRITTEN_COLOR}`,
+  borderRadius: "8px",
+  margin: "0 0.15rem",
+  padding: 0,
+  "& .MuiSelect-select": {
+    padding: "0.05rem 1.6rem 0.05rem 0.55rem !important",
+    minHeight: "0 !important",
   },
+  "& .MuiOutlinedInput-notchedOutline": { border: "none" },
+  "& .MuiSvgIcon-root": { color: HANDWRITTEN_COLOR, right: 2 },
 };
 
-const Section: React.FC<{
-  label: string;
-  helperText?: string;
-  children: React.ReactNode;
-}> = ({ label, helperText, children }) => (
-  <Box sx={{ mb: 1.5 }}>
-    <Typography
-      variant="overline"
-      sx={{ display: "block", fontWeight: 600, lineHeight: 1.4, color: "#444" }}
+interface InlineSelectProps<T extends string | number> {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  width?: number | string;
+}
+
+function InlineSelect<T extends string | number>({
+  value, options, onChange, width,
+}: InlineSelectProps<T>) {
+  return (
+    <Select
+      value={value}
+      variant="outlined"
+      size="small"
+      onChange={(e) => onChange(e.target.value as T)}
+      sx={{ ...inlineSelectSx, width: width ?? "auto" }}
+      MenuProps={{
+        PaperProps: {
+          sx: {
+            "& .MuiMenuItem-root": {
+              fontFamily: HANDWRITTEN_FONT,
+              fontSize: "1.2rem",
+              color: HANDWRITTEN_COLOR,
+            },
+          },
+        },
+      }}
     >
-      {label}
-    </Typography>
-    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
-      {children}
-    </Box>
-    {helperText && (
-      <Typography
-        sx={{ display: "block", fontSize: "0.72rem", color: "#666", mt: 0.5, lineHeight: 1.3 }}
-      >
-        {helperText}
-      </Typography>
-    )}
-  </Box>
-);
+      {options.map((opt) => (
+        <MenuItem key={String(opt.value)} value={opt.value}>
+          {opt.label}
+        </MenuItem>
+      ))}
+    </Select>
+  );
+}
+
+const sentenceSx = {
+  fontSize: "1rem",
+  lineHeight: 2.1,
+  color: "#333",
+  mb: 1.25,
+};
 
 const ControlBox: React.FC<Props> = ({ value, onChange }) => {
   const theme = useTheme();
@@ -90,22 +116,8 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
   const vClass: VehicleClassChoice = classFromOption(value.vehicleOption);
   const vVariant: VehicleVariant = variantFromOption(value.vehicleOption);
 
-  const setClass = (next: VehicleClassChoice) => {
-    set("vehicleOption", toVehicleOption(next, vVariant));
-  };
-  const setVariant = (next: VehicleVariant) => {
-    if (vClass === "no_car") return;
-    set("vehicleOption", toVehicleOption(vClass, next));
-  };
-
-  // Apartments and houses have different census-average household sizes.
-  // The "Avg" button always shows the right average for the chosen dwelling
-  // and, if the user is currently sitting on the previous average, we update
-  // occupants in lock-step so the toggle stays selected on "Avg".
-  const avgOccupants =
-    value.dwelling === "apartment" ? AVG_OCCUPANTS_APARTMENT : AVG_OCCUPANTS_HOUSE;
-  const avgOccupantsLabel = `Avg (${avgOccupants.toFixed(1)})`;
-
+  // --- Dwelling change auto-swaps occupants to the matching census average
+  //     when the user was sitting on the previous average.
   const setDwelling = (next: DwellingType) => {
     const wasOnAvg =
       value.occupants === AVG_OCCUPANTS_HOUSE ||
@@ -119,10 +131,92 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     });
   };
 
+  // --- Vehicle count: 0 forces vehicleOption to "no_car"; any positive value
+  //     restores a sensible default option if the user was at "no_car".
+  const setVehicleCount = (count: number) => {
+    if (count === 0) {
+      onChange({ ...value, vehicles: 0, vehicleOption: "no_car" });
+      return;
+    }
+    if (value.vehicleOption === "no_car") {
+      onChange({
+        ...value,
+        vehicles: count,
+        vehicleOption: toVehicleOption("hatchback", "byd"),
+      });
+    } else {
+      set("vehicles", count);
+    }
+  };
+
+  const setClass = (next: VehicleClassChoice) => {
+    if (next === "no_car") {
+      onChange({ ...value, vehicles: 0, vehicleOption: "no_car" });
+    } else {
+      set("vehicleOption", toVehicleOption(next, vVariant));
+    }
+  };
+  const setVariant = (next: VehicleVariant) => {
+    if (vClass === "no_car") return;
+    set("vehicleOption", toVehicleOption(vClass, next));
+  };
+
+  // --- Options for each inline dropdown ---
+  const dwellingOptions = [
+    { value: "house" as DwellingType, label: "house" },
+    { value: "apartment" as DwellingType, label: "apartment" },
+  ];
+  const stateOptions = STATES.map((s) => ({ value: s, label: STATE_LABELS[s] }));
+  const avgOccupants =
+    value.dwelling === "apartment" ? AVG_OCCUPANTS_APARTMENT : AVG_OCCUPANTS_HOUSE;
+  const occupantOptions: { value: number; label: string }[] = [
+    { value: avgOccupants, label: avgOccupants.toFixed(1) + " (avg)" },
+    ...OCCUPANT_INTS.map((n) => ({ value: n, label: String(n) })),
+  ];
+  const vehicleCount = value.vehicleOption === "no_car" ? 0 : value.vehicles;
+  const vehicleCountOptions: { value: number; label: string }[] = [
+    { value: AVG_VEHICLES, label: AVG_VEHICLES + " (avg)" },
+    ...VEHICLE_INTS.map((n) => ({ value: n, label: String(n) })),
+  ];
+  const classOptions = VEHICLE_CLASS_CHOICES
+    .filter((c) => c !== "no_car")
+    .map((c) => ({
+      value: c,
+      label: VEHICLE_CLASS_CHOICE_LABELS[c].toLowerCase(),
+    }));
+  const variantOptions: { value: VehicleVariant; label: string }[] =
+    vClass === "no_car"
+      ? []
+      : VEHICLE_VARIANTS.map((v) => ({
+          value: v,
+          label: variantLabel(v, vClass).toLowerCase(),
+        }));
+  const distanceOptions = DRIVING_LEVELS.map((lvl) => ({
+    value: lvl,
+    label: DRIVING_LEVEL_LABELS[lvl],
+  }));
+  const financeOptions = [
+    { value: "cash" as const, label: "cash" },
+    { value: "loan" as const, label: "a loan (8.8%, 10yr)" },
+  ];
+  const periodOptions: { value: Period; label: string }[] = [
+    { value: "1year", label: "1" },
+    { value: "15year", label: "15" },
+  ];
+  const scenarioOptions: { value: SolarScenario; label: string }[] = [
+    { value: "grid_only", label: "no solar" },
+    { value: "solar", label: "solar" },
+    { value: "solar_optimised", label: "solar with smart timers on appliances" },
+  ];
+
+  const dwellingArticle = value.dwelling === "apartment" ? "an" : "a";
+  const hasCar = vehicleCount > 0;
+  const carPhrase = hasCar && vehicleCount === 1 ? "car" : "cars";
+
   return (
     <Box
       sx={{
-        padding: "1rem",
+        padding: "1.25rem 1.1rem",
         backgroundColor: theme.palette.background.paper,
         border: "1px solid #d7d5cd",
         borderRadius: 1,
@@ -130,152 +224,97 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
       }}
     >
       <Typography variant="h3" sx={{ mt: 0, mb: 1.5, fontSize: "1.05rem" }}>
-        Household settings
+        About my home
       </Typography>
 
-      <Section label="Location">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={value.state}
-          onChange={(_, v: StateCode | null) => v && set("state", v)}
-          sx={groupSx}
-        >
-          {STATES.map((s) => (
-            <ToggleButton key={s} value={s}>
-              {STATE_LABELS[s]}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      </Section>
-
-      <Section label="Dwelling">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
+      <Typography component="div" sx={sentenceSx}>
+        I live in {dwellingArticle}{" "}
+        <InlineSelect
           value={value.dwelling}
-          onChange={(_, v: DwellingType | null) => v && setDwelling(v)}
-          sx={groupSx}
-        >
-          <ToggleButton value="house">House</ToggleButton>
-          <ToggleButton value="apartment">Apartment</ToggleButton>
-        </ToggleButtonGroup>
-      </Section>
+          options={dwellingOptions}
+          onChange={(v) => setDwelling(v)}
+        />{" "}
+        in{" "}
+        <InlineSelect
+          value={value.state}
+          options={stateOptions}
+          onChange={(v: StateCode) => set("state", v)}
+        />.
+      </Typography>
 
-      <Section label="Occupants">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
+      <Typography component="div" sx={sentenceSx}>
+        <InlineSelect
           value={value.occupants}
-          onChange={(_, v: number | null) => v !== null && set("occupants", v)}
-          sx={groupSx}
-        >
-          <ToggleButton value={avgOccupants}>{avgOccupantsLabel}</ToggleButton>
-          {OCCUPANT_INTS.map((n) => (
-            <ToggleButton key={n} value={n}>
-              {n}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      </Section>
+          options={occupantOptions}
+          onChange={(v: number) => set("occupants", v)}
+        />{" "}
+        people live here with{" "}
+        <InlineSelect
+          value={vehicleCount}
+          options={vehicleCountOptions}
+          onChange={(v: number) => setVehicleCount(v)}
+        />{" "}
+        {carPhrase}
+        {hasCar && (
+          <>
+            ,{" "}
+            <InlineSelect
+              value={vVariant}
+              options={variantOptions}
+              onChange={(v: VehicleVariant) => setVariant(v)}
+            />{" "}
+            <InlineSelect
+              value={vClass}
+              options={classOptions}
+              onChange={(v: VehicleClassChoice) => setClass(v)}
+            />
+          </>
+        )}
+        .{" "}
+        {hasCar && (
+          <>
+            I usually drive{" "}
+            <InlineSelect
+              value={value.drivingLevel}
+              options={distanceOptions}
+              onChange={(v: DrivingLevel) => set("drivingLevel", v)}
+            />{" "}
+            km a week.
+          </>
+        )}
+      </Typography>
 
-      <Section label="Vehicles">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={value.vehicles}
-          onChange={(_, v: number | null) => v !== null && set("vehicles", v)}
-          sx={groupSx}
-        >
-          <ToggleButton value={AVG_VEHICLES}>Avg (1.8)</ToggleButton>
-          {VEHICLE_INTS.map((n) => (
-            <ToggleButton key={n} value={n}>
-              {n}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      </Section>
-
-      <Section label="Vehicle type">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={vClass}
-          onChange={(_, v: VehicleClassChoice | null) => v && setClass(v)}
-          sx={groupSx}
-        >
-          {VEHICLE_CLASS_CHOICES.map((c) => (
-            <ToggleButton key={c} value={c}>
-              {VEHICLE_CLASS_CHOICE_LABELS[c]}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      </Section>
-
-      <Box sx={{ mb: 1.5, mt: -0.5 }}>
-        <VehicleGraphic vClass={vClass} />
-      </Box>
-
-      {vClass !== "no_car" && (
-        <Section label="Variant">
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={vVariant}
-            onChange={(_, v: VehicleVariant | null) => v && setVariant(v)}
-            sx={groupSx}
-          >
-            {VEHICLE_VARIANTS.map((variant) => (
-              <ToggleButton key={variant} value={variant}>
-                {variantLabel(variant, vClass)}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        </Section>
+      {hasCar && (
+        <Box sx={{ mb: 1, mt: -0.5 }}>
+          <VehicleGraphic vClass={vClass} />
+        </Box>
       )}
 
-      <Section label="Finance">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={value.finance ? "yes" : "no"}
-          onChange={(_, v: string | null) => v && set("finance", v === "yes")}
-          sx={groupSx}
-        >
-          <ToggleButton value="no">Cash</ToggleButton>
-          <ToggleButton value="yes">Loan (7%, 10yr)</ToggleButton>
-        </ToggleButtonGroup>
-      </Section>
+      <Typography component="div" sx={sentenceSx}>
+        I'll pay for upgrades with{" "}
+        <InlineSelect
+          value={value.finance ? "loan" : "cash"}
+          options={financeOptions}
+          onChange={(v: "cash" | "loan") => set("finance", v === "loan")}
+          width={170}
+        />.
+      </Typography>
 
-      <Section label="Period">
-        <ToggleButtonGroup
-          size="small"
-          exclusive
+      <Typography component="div" sx={sentenceSx}>
+        Show me my savings over{" "}
+        <InlineSelect
           value={value.period}
-          onChange={(_, v: Period | null) => v && set("period", v)}
-          sx={groupSx}
-        >
-          <ToggleButton value="1year">1 year</ToggleButton>
-          <ToggleButton value="15year">15 years</ToggleButton>
-        </ToggleButtonGroup>
-      </Section>
-
-      <Section
-        label="Scenario"
-        helperText="The solar scenario models a house with solar but no timers or optimisation"
-      >
-        <ToggleButtonGroup
-          size="small"
-          exclusive
+          options={periodOptions}
+          onChange={(v: Period) => set("period", v)}
+        />{" "}
+        years, assuming we have{" "}
+        <InlineSelect
           value={value.solarScenario}
-          onChange={(_, v: SolarScenario | null) => v && set("solarScenario", v)}
-          sx={groupSx}
-        >
-          <ToggleButton value="grid_only">Grid only</ToggleButton>
-          <ToggleButton value="solar">Solar</ToggleButton>
-          <ToggleButton value="solar_optimised">Solar optimised</ToggleButton>
-        </ToggleButtonGroup>
-      </Section>
+          options={scenarioOptions}
+          onChange={(v: SolarScenario) => set("solarScenario", v)}
+          width={"min(340px, 100%)"}
+        />.
+      </Typography>
     </Box>
   );
 };
