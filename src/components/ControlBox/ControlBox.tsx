@@ -2,6 +2,7 @@ import React from "react";
 import { Box, MenuItem, Select, Typography, useTheme } from "@mui/material";
 import {
   DwellingType,
+  EvTariff,
   HouseInputs,
   Period,
   SolarScenario,
@@ -195,9 +196,13 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     value: lvl,
     label: DRIVING_LEVEL_LABELS[lvl],
   }));
+  const evTariffOptions: { value: EvTariff; label: string }[] = [
+    { value: "off_peak", label: "offpeak" },
+    { value: "ev",       label: "EV" },
+  ];
   const financeOptions = [
     { value: "cash" as const, label: "cash" },
-    { value: "loan" as const, label: "a loan (8.8%, 10yr)" },
+    { value: "loan" as const, label: "a loan (7%, 10yr)" },
   ];
   const periodOptions: { value: Period; label: string }[] = [
     { value: "1year", label: "1" },
@@ -279,7 +284,13 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
               options={distanceOptions}
               onChange={(v: DrivingLevel) => set("drivingLevel", v)}
             />{" "}
-            km a week.
+            km a week. I charge on solar and an{" "}
+            <InlineSelect
+              value={value.evTariff}
+              options={evTariffOptions}
+              onChange={(v: EvTariff) => set("evTariff", v)}
+            />{" "}
+            tariff.
           </>
         )}
       </Typography>

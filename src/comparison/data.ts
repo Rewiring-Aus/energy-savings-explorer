@@ -188,7 +188,7 @@ export const FUEL_PRICES: Record<StateCode, Partial<Record<Fuel, FuelPrice>>> = 
     electricity:          { current: 0.3403, forecast15yr: 0.3980, dailyToday: 1.3308, daily15yr: 1.5567 },
     electricity_off_peak: { current: 0.2603, forecast15yr: 0.3045, dailyToday: 0,      daily15yr: 0 },
     ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
-    gas:                  { current: 0.1968, forecast15yr: 0.2458, dailyToday: 0.7396, daily15yr: 0.9238 },
+    gas:                  { current: 0.1575, forecast15yr: 0.1967, dailyToday: 0.7398, daily15yr: 0.9241 },
     lpg:                  { current: 0.2542, forecast15yr: 0.3175, dailyToday: 0.2948, daily15yr: 0.3682 },
     petrol:               { current: 0.1896, forecast15yr: 0.2139, dailyToday: 0,      daily15yr: 0 },
     diesel:               { current: 0.1734, forecast15yr: 0.1957, dailyToday: 0,      daily15yr: 0 },
@@ -233,7 +233,7 @@ export const FUEL_PRICES: Record<StateCode, Partial<Record<Fuel, FuelPrice>>> = 
     electricity:          { current: 0.3237, forecast15yr: 0.3786, dailyToday: 1.1605, daily15yr: 1.3574 },
     electricity_off_peak: { current: 0.2369, forecast15yr: 0.2771, dailyToday: 0,      daily15yr: 0 },
     ev_fast_charge:       { current: 0.6500, forecast15yr: 0.7603, dailyToday: 0,      daily15yr: 0 },
-    gas:                  { current: 0.4968, forecast15yr: 0.6205, dailyToday: 0.3903, daily15yr: 0.4875 },
+    gas:                  { current: 0.1184, forecast15yr: 0.1479, dailyToday: 0.3920, daily15yr: 0.4896 },
     lpg:                  { current: 0.2840, forecast15yr: 0.3547, dailyToday: 0.2685, daily15yr: 0.3354 },
     petrol:               { current: 0.1848, forecast15yr: 0.2085, dailyToday: 0,      daily15yr: 0 },
     diesel:               { current: 0.1710, forecast15yr: 0.1929, dailyToday: 0,      daily15yr: 0 },
@@ -270,8 +270,16 @@ export const FUEL_PRICES: Record<StateCode, Partial<Record<Fuel, FuelPrice>>> = 
 // Fraction of total EV energy obtained at DC fast chargers (Econnex 2025).
 // Fast-charged kWh: priced at ev_fast_charge, not eligible for solar, NOT in
 // the home electricity supply-charge denominator. The remaining (1 - this)
-// is home charging at the off-peak rate above.
+// is home charging, priced per the household's evTariff setting (see
+// EV_DEDICATED_DOL_KWH below or the per-state electricity_off_peak row).
 export const FAST_CHARGE_FRACTION = 0.15;
+
+// Dedicated EV tariff ($/kWh) — flat retail rate offered on a separately
+// metered EV-only circuit. Applied to home-charged, non-solar EV kWh when
+// the household selects the "EV" tariff toggle (HouseInputs.evTariff = "ev").
+// Held flat in nominal terms, so 1-year and 15-year values are identical.
+// Mirrors R EV_OFF_PEAK_DOL_KWH (R fallback is 5c; we use 8c for AU 2026).
+export const EV_DEDICATED_DOL_KWH = 0.08;
 
 // ---------------------------------------------------------------------------
 // solar_lcoe_by_state.csv — levelised cost ($/kWh) of self-generated solar.
@@ -371,9 +379,8 @@ export const BATTERY_INSTALLATION_COST = 2300;
 // Unsubsidised list price would be $940/kWh.
 export const BATTERY_COST_PER_KWH = 620;
 
-// VPP annual benefit ($) — flat payment from VPP participation
-// (Tipping point CSV, row "VPP annual benefit").
-export const VPP_ANNUAL_BENEFIT = 400;
+// VPP annual benefit ($) — flat payment from VPP participation.
+export const VPP_ANNUAL_BENEFIT = 300;
 
 // Seasonal evening-peak ($/kWh) by state — four hourly tiers (4-8 pm) across
 // the four Australian seasons. Built from evening_peak_prices_monthly.csv by
@@ -450,12 +457,12 @@ export const LARGE_SYSTEM_SOLAR_KWP = 10;
 export const SOLAR_KW_OPTIONS = [6.6, 10, 15] as const;
 export type SolarSizeKw = (typeof SOLAR_KW_OPTIONS)[number];
 
-export const BATTERY_KWH_OPTIONS = [12, 20, 40] as const;
+export const BATTERY_KWH_OPTIONS = [15, 20, 40] as const;
 export type BatterySizeKwh = (typeof BATTERY_KWH_OPTIONS)[number];
 
 // Battery model parameters (battery_model.R)
 export const BATTERY_ROUND_TRIP_EFFICIENCY = 0.90;
-export const BATTERY_HOUSEHOLD_SAFEGUARD_PCT = 0.20;
+export const BATTERY_HOUSEHOLD_SAFEGUARD_PCT = 0.10;
 export const BATTERY_USEABLE_CAPACITY_PCT = 0.90;
 export const BATTERY_DEGRADATION_1YR = 0.04;
 export const BATTERY_DEGRADATION_15YR_AVG = 0.022;
@@ -603,3 +610,8 @@ export const APPLIANCE_CAPEX = {
   cooktopGas: 1200,
   cooktopLpg: 1200,
 };
+
+// One-off switchboard upgrade added to all-electric scenarios to cover the
+// cumulative load of heat pump heating + heat pump HW + induction + EV
+// charging. Mirrors R model switchboard_upgrade_capex.
+export const SWITCHBOARD_UPGRADE_CAPEX = 2500;

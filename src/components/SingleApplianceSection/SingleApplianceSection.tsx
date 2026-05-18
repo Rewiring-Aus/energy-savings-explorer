@@ -606,6 +606,7 @@ const EnergyDiagnosticTable: React.FC<{
   solarKw: SolarSizeKw;
   batteryKwh: BatterySizeKwh;
 }> = ({ baseInputs, solarKw, batteryKwh }) => {
+  const [open, setOpen] = useState(false);
   const flows = solarBatteryEnergyFlows(baseInputs, solarKw, batteryKwh);
   const fmt = (n: number) =>
     `${new Intl.NumberFormat("en-AU", { maximumFractionDigits: 0 }).format(n)} kWh`;
@@ -650,35 +651,62 @@ const EnergyDiagnosticTable: React.FC<{
         fontSize: "0.78rem",
       }}
     >
-      <Typography
-        variant="caption"
-        sx={{ display: "block", fontWeight: 700, color: "#444", mb: 0.5 }}
-      >
-        Diagnostic — underlying energy flows ({periodLabel}, {solarKw} kW solar + {batteryKwh} kWh battery)
-      </Typography>
       <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "minmax(180px, 1.4fr) repeat(3, minmax(110px, 1fr))",
-          columnGap: 1.5,
-          rowGap: 0.3,
-          color: "#333",
-          fontVariantNumeric: "tabular-nums",
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((o) => !o);
+          }
         }}
+        sx={{ cursor: "pointer", userSelect: "none", "&:hover": { color: "#000" } }}
       >
-        <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666" }} />
-        <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666", textAlign: "right" }}>Self-consume</Box>
-        <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666", textAlign: "right" }}>VPP</Box>
-        <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666", textAlign: "right" }}>Wholesale</Box>
-        {rows.map((row) => (
-          <React.Fragment key={row.label}>
-            <Box>{row.label}</Box>
-            <Box sx={{ textAlign: "right" }}>{row.vals[0]}</Box>
-            <Box sx={{ textAlign: "right" }}>{row.vals[1]}</Box>
-            <Box sx={{ textAlign: "right" }}>{row.vals[2]}</Box>
-          </React.Fragment>
-        ))}
+        <Typography
+          variant="caption"
+          sx={{ display: "block", fontWeight: 700, color: "#444" }}
+        >
+          <Box
+            component="span"
+            sx={{
+              display: "inline-block",
+              width: "0.9em",
+              transform: open ? "rotate(90deg)" : "rotate(0deg)",
+              transition: "transform 0.15s ease",
+            }}
+          >
+            ▸
+          </Box>{" "}
+          Diagnostic — underlying energy flows ({periodLabel}, {solarKw} kW solar + {batteryKwh} kWh battery)
+        </Typography>
       </Box>
+      {open && (
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "minmax(180px, 1.4fr) repeat(3, minmax(110px, 1fr))",
+            columnGap: 1.5,
+            rowGap: 0.3,
+            color: "#333",
+            fontVariantNumeric: "tabular-nums",
+            mt: 0.5,
+          }}
+        >
+          <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666" }} />
+          <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666", textAlign: "right" }}>Self-consume</Box>
+          <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666", textAlign: "right" }}>VPP</Box>
+          <Box sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#666", textAlign: "right" }}>Wholesale</Box>
+          {rows.map((row) => (
+            <React.Fragment key={row.label}>
+              <Box>{row.label}</Box>
+              <Box sx={{ textAlign: "right" }}>{row.vals[0]}</Box>
+              <Box sx={{ textAlign: "right" }}>{row.vals[1]}</Box>
+              <Box sx={{ textAlign: "right" }}>{row.vals[2]}</Box>
+            </React.Fragment>
+          ))}
+        </Box>
+      )}
     </Box>
   );
 };
@@ -688,7 +716,7 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
   const [includeCapex, setIncludeCapex] = useState<boolean>(true);
   // Solar + battery sizing — only used when category === "Solar+Battery".
   const [solarKw, setSolarKw] = useState<SolarSizeKw>(10);
-  const [batteryKwh, setBatteryKwh] = useState<BatterySizeKwh>(20);
+  const [batteryKwh, setBatteryKwh] = useState<BatterySizeKwh>(15);
   const period = baseInputs.period;
   const isOneYear = period === "1year";
   const years = period === "1year" ? 1 : 15;

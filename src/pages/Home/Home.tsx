@@ -32,6 +32,7 @@ const formatPriceKwh = (n: number) => `${(n * 100).toFixed(1)} ¢/kWh`;
 const Home: React.FC = () => {
   const theme = useTheme();
   const [inputs, setInputs] = useState<HouseInputs>(DEFAULT_INPUTS);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   const result = useMemo(() => compareHouses(inputs), [inputs]);
   const batteryDiag = useMemo(() => wholeHomeBatteryDiagnostics(inputs), [inputs]);
@@ -124,12 +125,40 @@ const Home: React.FC = () => {
               }}
             >
               <Box
-                sx={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 1 }}
+                role="button"
+                tabIndex={0}
+                onClick={() => setDiagOpen((o) => !o)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setDiagOpen((o) => !o);
+                  }
+                }}
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  gap: 1,
+                  cursor: "pointer",
+                  userSelect: "none",
+                  "&:hover": { color: "#000" },
+                }}
               >
                 <Typography
                   component="span"
                   sx={{ fontWeight: 700, fontSize: "0.72rem", color: "#444" }}
                 >
+                  <Box
+                    component="span"
+                    sx={{
+                      display: "inline-block",
+                      width: "0.9em",
+                      transform: diagOpen ? "rotate(90deg)" : "rotate(0deg)",
+                      transition: "transform 0.15s ease",
+                    }}
+                  >
+                    ▸
+                  </Box>{" "}
                   Battery diagnostics ({batteryDiag.solarKw} kW solar + {batteryDiag.batteryKwh} kWh battery)
                 </Typography>
                 {!batteryDiag.active && (
@@ -141,42 +170,54 @@ const Home: React.FC = () => {
                   </Typography>
                 )}
               </Box>
-              <Box
-                sx={{
-                  display: "grid",
-                  gridTemplateColumns: "auto 1fr",
-                  columnGap: 1.5,
-                  rowGap: 0.25,
-                  mt: 0.4,
-                }}
-              >
-                <span>Headroom kWh/yr (battery → grid surplus):</span>
-                <strong>{formatKwh(batteryDiag.headroomKwhPerYear)}</strong>
-                <span>Daytime PV export kWh/yr:</span>
-                <strong>{formatKwh(batteryDiag.exportKwhPerYear)}</strong>
-                <span>FiT / Wholesale rates:</span>
-                <strong>
-                  {formatPriceKwh(batteryDiag.fitPriceKwh)} / {formatPriceKwh(batteryDiag.wholesalePriceKwh)}
-                </strong>
-                <span style={{ color: inputs.batteryValue === "self_consume" ? "#000" : "#666" }}>
-                  Self-consume value (no battery export):
-                </span>
-                <strong style={{ color: inputs.batteryValue === "self_consume" ? "#000" : "#666" }}>
-                  {formatDollars(batteryDiag.selfConsumeAnnualValue)}/yr
-                </strong>
-                <span style={{ color: inputs.batteryValue === "vpp" ? "#000" : "#666" }}>
-                  VPP value ($400 flat membership):
-                </span>
-                <strong style={{ color: inputs.batteryValue === "vpp" ? "#000" : "#666" }}>
-                  {formatDollars(batteryDiag.vppAnnualValue)}/yr
-                </strong>
-                <span style={{ color: inputs.batteryValue === "wholesale" ? "#000" : "#666" }}>
-                  Wholesale value (headroom × wholesale):
-                </span>
-                <strong style={{ color: inputs.batteryValue === "wholesale" ? "#000" : "#666" }}>
-                  {formatDollars(batteryDiag.wholesaleAnnualValue)}/yr
-                </strong>
-              </Box>
+              {diagOpen && (
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr",
+                    columnGap: 1.5,
+                    rowGap: 0.25,
+                    mt: 0.4,
+                  }}
+                >
+                  <span>PV generation / self-consumption / battery charge / export kWh/yr:</span>
+                  <strong>
+                    {formatKwh(batteryDiag.solarGenerationKwhPerYear)} /{" "}
+                    {formatKwh(batteryDiag.solarSelfConsumedKwhPerYear)} /{" "}
+                    {formatKwh(batteryDiag.batteryChargeKwhPerYear)} /{" "}
+                    {formatKwh(batteryDiag.exportKwhPerYear)}
+                  </strong>
+                  <span>Battery charge / discharge kWh/yr:</span>
+                  <strong>
+                    {formatKwh(batteryDiag.batteryChargeKwhPerYear)} /{" "}
+                    {formatKwh(batteryDiag.batteryDischargeKwhPerYear)}
+                  </strong>
+                  <span>Headroom kWh/yr (battery → grid surplus):</span>
+                  <strong>{formatKwh(batteryDiag.headroomKwhPerYear)}</strong>
+                  <span>FiT / Wholesale rates:</span>
+                  <strong>
+                    {formatPriceKwh(batteryDiag.fitPriceKwh)} / {formatPriceKwh(batteryDiag.wholesalePriceKwh)}
+                  </strong>
+                  <span style={{ color: inputs.batteryValue === "self_consume" ? "#000" : "#666" }}>
+                    Self-consume value (no battery export):
+                  </span>
+                  <strong style={{ color: inputs.batteryValue === "self_consume" ? "#000" : "#666" }}>
+                    {formatDollars(batteryDiag.selfConsumeAnnualValue)}/yr
+                  </strong>
+                  <span style={{ color: inputs.batteryValue === "vpp" ? "#000" : "#666" }}>
+                    VPP value (flat membership):
+                  </span>
+                  <strong style={{ color: inputs.batteryValue === "vpp" ? "#000" : "#666" }}>
+                    {formatDollars(batteryDiag.vppAnnualValue)}/yr
+                  </strong>
+                  <span style={{ color: inputs.batteryValue === "wholesale" ? "#000" : "#666" }}>
+                    Wholesale value (headroom × wholesale):
+                  </span>
+                  <strong style={{ color: inputs.batteryValue === "wholesale" ? "#000" : "#666" }}>
+                    {formatDollars(batteryDiag.wholesaleAnnualValue)}/yr
+                  </strong>
+                </Box>
+              )}
             </Box>
           </Box>
           <ComparisonChart

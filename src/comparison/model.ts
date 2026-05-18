@@ -9,12 +9,12 @@ import {
   BATTERY_DEGRADATION_1YR,
   BATTERY_HOUSEHOLD_SAFEGUARD_PCT,
   BATTERY_INSTALLATION_COST,
-  BATTERY_MIN_GRID_PCT,
   BATTERY_ROUND_TRIP_EFFICIENCY,
   BATTERY_USEABLE_CAPACITY_PCT,
   BatterySizeKwh,
   DrivingLevel,
   ENERGY_USE,
+  EV_DEDICATED_DOL_KWH,
   FAST_CHARGE_FRACTION,
   FIT_BY_STATE,
   Fuel,
@@ -34,6 +34,7 @@ import {
   SolarSizeKw,
   STATES,
   StateCode,
+  SWITCHBOARD_UPGRADE_CAPEX,
   VEHICLE_CAPEX_NEW,
   VEHICLE_EFFICIENCY_WH_KM,
   VehicleClass,
@@ -88,15 +89,21 @@ export const INVERTER_REPLACEMENT_YEAR = 12;
 // battery. The battery export credit is what makes the "Battery export"
 // toggle on chart 1 meaningful.
 export const WHOLE_HOME_SOLAR_KW = 10;
-export const WHOLE_HOME_BATTERY_KWH = 12;
+export const WHOLE_HOME_BATTERY_KWH = 15;
 
 // How the home battery's exports are valued. "Self-consume" assumes any
 // stored solar that can't be self-consumed is exported at the FiT (no VPP /
-// arbitrage). "VPP" adds a flat annual benefit ($400/yr per Tipping point
-// CSV) for VPP membership. "Wholesale" values the battery's evening-peak
+// arbitrage). "VPP" adds a flat annual benefit (VPP_ANNUAL_BENEFIT) for VPP
+// membership. "Wholesale" values the battery's evening-peak
 // export headroom at the median 4–8 pm wholesale price (median of
 // evening_peak_prices_annual.csv).
 export type BatteryValueMode = "self_consume" | "vpp" | "wholesale";
+
+// Tariff applied to home-charged EV kWh (the non-fast-charge, non-solar
+// portion). "ev" → dedicated EV plan at EV_DEDICATED_DOL_KWH (flat 8c/kWh).
+// "off_peak" → the household's standard off-peak retail rate. Fast-charge
+// kWh are always at the public DC rate regardless of this setting.
+export type EvTariff = "ev" | "off_peak";
 
 export interface HouseInputs {
   state: StateCode;
@@ -111,6 +118,7 @@ export interface HouseInputs {
   loanTerm: number;
   solarScenario: SolarScenario;
   batteryValue: BatteryValueMode;
+  evTariff: EvTariff;
 }
 
 export const DEFAULT_INPUTS: HouseInputs = {
@@ -122,11 +130,20 @@ export const DEFAULT_INPUTS: HouseInputs = {
   dwelling: "house",
   finance: false,
   period: "15year",
-  loanRate: 0.088,        // matches SOLAR_LCOE_INTEREST_RATE in R model
+  loanRate: 0.07,         // matches R evaluate_household() loan_rate default
   loanTerm: 10,
   solarScenario: "grid_only",
-  batteryValue: "self_consume",
+  batteryValue: "wholesale",
+  evTariff: "ev",
 };
+
+// Per-kWh price of home-charged EV kWh (after solar self-consumption).
+// "ev"      → flat dedicated EV plan (EV_DEDICATED_DOL_KWH, no CPI).
+// "off_peak" → the household's standard off-peak retail rate.
+function evHomeChargePriceKwh(state: StateCode, period: Period, evTariff: EvTariff): number {
+  if (evTariff === "ev") return EV_DEDICATED_DOL_KWH;
+  return priceFor(state, "electricity_off_peak", period).kwh;
+}
 
 export interface HouseCost {
   capital: number;     // $ — capex paid (cash) or principal portion of loan repayments
@@ -239,7 +256,7 @@ function effectiveVehicleCount(inputs: HouseInputs): number {
 }
 
 export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
-  const { state, occupants, dwelling, period, solarScenario, vehicleOption, drivingLevel } = inputs;
+  const { state, occupants, dwelling, period, vehicleOption, drivingLevel } = inputs;
   const occScale = getScalingFactor(occupants);
   const dwScale = dwelling === "apartment" ? APARTMENT_ENERGY_FACTOR : 1;
   const years = period === "1year" ? 1 : 15;
@@ -261,7 +278,9 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   const cooktopKwh  = energy("Cooktop",       fossilLabelForEnergy, state) * occScale * dwScale;
   const fossilDemand = heatingKwh + waterKwh + cooktopKwh;
 
-  // Always-electric loads
+  // Always-electric loads (no solar in the gas baseline regardless of the
+  // user's scenario toggle — mirrors R evaluate_household, where the Gas
+  // scenario is pinned to solar = "grid_only" and never installs a PV array).
   const otherKwh   = OTHER_ELEC_KWH_DAY[state] * occScale * dwScale;
   const coolingKwh = energy("Space Cooling", "Heat pump", state) * occScale * dwScale;
   const elecDemand = otherKwh + coolingKwh;
@@ -275,30 +294,21 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   const elecPrice   = priceFor(state, "electricity", period);
   const petrolPrice = priceFor(state, "petrol", period);
 
-  // Solar split applies to electric loads only (cooling + other).
-  const frac = SOLAR_FRACTION_BY_SCENARIO[solarScenario];
-  const solarKwhDay = coolingKwh * frac.spaceCooling + otherKwh * frac.other;
-  const gridElecKwhDay = elecDemand - solarKwhDay;
-
   const gasVolumeCost    = fossilDemand * 365 * fossilPrice.kwh * years;
   const gasSupplyCost    = fossilDemand > 0 ? fossilPrice.daily * days : 0;
   const petrolVolumeCost = iceKwhDay * 365 * petrolPrice.kwh * years;
-  const elecVolumeCost   = gridElecKwhDay * 365 * elecPrice.kwh * years;
+  const elecVolumeCost   = elecDemand * 365 * elecPrice.kwh * years;
   const elecSupplyCost   = elecPrice.daily * days;
 
   const gas         = gasVolumeCost + gasSupplyCost;
   const petrol      = petrolVolumeCost;
-  // Self-consumed solar is free at the appliance level — PV capex is tracked
-  // separately via solarSystemCapex(); the FiT flow only applies to kWh that
-  // are actually exported (R L1380-1388). No "forgone FiT" charge here.
   const electricity = elecVolumeCost + elecSupplyCost;
 
   const applianceCapex = fossilCapexHeating + fossilCapexWater + fossilCapexCooktop;
   const vehicleCapex   = vehicleCount > 0
     ? VEHICLE_OPTION_DATA[vehicleOption].iceCapex * vehicleCount
     : 0;
-  const pvCapex        = solarSystemCapex(state, WHOLE_HOME_SOLAR_KW, solarScenario, years);
-  const totalCapex     = applianceCapex + vehicleCapex + pvCapex;
+  const totalCapex     = applianceCapex + vehicleCapex;
 
   // 1-year view is operating-cost only at current prices (no capex, no finance).
   const { capital, interest } = period === "1year"
@@ -341,73 +351,100 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
   const evHomeKwhDay  = evTotalKwhDay - evFastKwhDay;
 
   const elecPrice        = priceFor(state, "electricity", period);
-  const offPeakPrice     = priceFor(state, "electricity_off_peak", period);
+  const evHomePriceKwh   = evHomeChargePriceKwh(state, period, inputs.evTariff);
   const fastChargePrice  = priceFor(state, "ev_fast_charge", period);
 
   // Solar only applies to home-charged EV kWh (R: fast-charge kWh leave the
   // home meter entirely so can't be served from rooftop solar).
+  //
+  // Bottom-up cap: the per-appliance solar fractions describe daytime *demand*
+  // for solar; actual self-consumption can't exceed what the PV system
+  // generates that day. When aggregate demand exceeds generation we scale
+  // every fraction down proportionally — same approach as R
+  // get_household_self_sufficiency()'s solar_scale_factor.
   const frac = SOLAR_FRACTION_BY_SCENARIO[solarScenario];
-  const solarKwhDay =
+  const solarDemandKwhDay =
     heatingKwh   * frac.spaceHeating +
     coolingKwh   * frac.spaceCooling +
     waterKwh     * frac.waterHeating +
     cooktopKwh   * frac.cooktop +
     otherKwh     * frac.other +
     evHomeKwhDay * frac.vehicles;
+  const pvDailyKwh = SOLAR_DAILY_KWH_PER_KW[state] * WHOLE_HOME_SOLAR_KW;
+  const solarScale = solarScenario === "grid_only" || solarDemandKwhDay === 0
+    ? 1
+    : solarDemandKwhDay > pvDailyKwh
+      ? pvDailyKwh / solarDemandKwhDay
+      : 1;
+  const solarKwhDay = solarDemandKwhDay * solarScale;
+  const evSolarKwhDay = evHomeKwhDay * frac.vehicles * solarScale;
   // Non-EV electric loads (heating/cooling/water/cooktop/other) priced at flat
   // retail; EV home charging priced at off-peak. Self-consumed solar reduces
   // the *retail-priced* portion only (the load it physically displaces is
   // daytime appliance use, not the overnight EV).
   const nonEvElecKwhDay  = heatingKwh + coolingKwh + waterKwh + cooktopKwh + otherKwh;
-  const nonEvSolarKwhDay = solarKwhDay - evHomeKwhDay * frac.vehicles;
+  const nonEvSolarKwhDay = solarKwhDay - evSolarKwhDay;
   const nonEvGridKwhDay  = Math.max(nonEvElecKwhDay - nonEvSolarKwhDay, 0);
-  const evHomeGridKwhDay = Math.max(evHomeKwhDay - evHomeKwhDay * frac.vehicles, 0);
+  const evHomeGridKwhDay = Math.max(evHomeKwhDay - evSolarKwhDay, 0);
 
   const elecRetailCost   = nonEvGridKwhDay   * 365 * elecPrice.kwh       * years;
-  const evHomeChargeCost = evHomeGridKwhDay  * 365 * offPeakPrice.kwh    * years;
+  const evHomeChargeCost = evHomeGridKwhDay  * 365 * evHomePriceKwh      * years;
   const evFastChargeCost = evFastKwhDay      * 365 * fastChargePrice.kwh * years;
   const elecSupplyCost   = elecPrice.daily * days;
-  // Self-consumed solar is free at the appliance level — PV capex tracked
-  // separately via solarSystemCapex(); FiT applies only to actual exports.
 
-  // --- Battery export credit (Battery export toggle, chart 1) ---
-  // When scenario != grid_only, assume the household has a 12 kWh battery
-  // alongside the PV. The credit comes from kWh discharged to the grid
-  // (headroom × tiered seasonal wholesale, or VPP membership). Battery
-  // hardware capex is added separately. The battery's load-serving value
-  // (stored solar → home) and direct daytime self-consumption are already
-  // implicit in the solar grid-kWh reduction above, so we do NOT add them
-  // here (avoids double-counting).
+  // --- Solar + battery credits (chart 1) ---
+  // Mirrors R evaluate_solar_battery, which always adds three streams to the
+  // household total regardless of any user toggle:
+  //   - FiT on daytime excess solar export
+  //   - Evening battery → home discharge (stored solar serving appliance load),
+  //     valued at retail
+  //   - Battery export headroom — valuation depends on the batteryValue mode:
+  //       self_consume → 0 (battery rolls over instead of exporting)
+  //       vpp          → flat VPP_ANNUAL_BENEFIT
+  //       wholesale    → tiered seasonal evening-peak schedule
+  // Daytime self-consumption itself is already credited above via the solar-
+  // fraction grid-kWh reduction (so we don't add solarSelfConsumedKwh here —
+  // would double-count).
   let batteryCredit = 0;
   let batteryCapex = 0;
   if (solarScenario !== "grid_only") {
     const flows = annualBatteryFlows(inputs, WHOLE_HOME_SOLAR_KW, WHOLE_HOME_BATTERY_KWH, years);
-    // Self-consume: battery doesn't discharge to grid (headroom rolls over).
-    // VPP: flat membership benefit, no headroom discharge.
-    // Wholesale: headroom traded via the tiered evening-peak schedule.
-    let perYear = 0;
+    const fit = FIT_BY_STATE[state] ?? 0;
+    const fitExportPerYear     = flows.exportKwh * fit;
+    const batteryToHomePerYear = flows.batteryDischargeKwh * elecPrice.kwh;
+    let headroomPerYear = 0;
     switch (inputs.batteryValue) {
-      case "self_consume": perYear = 0; break;
-      case "vpp":          perYear = VPP_ANNUAL_BENEFIT; break;
-      case "wholesale":    perYear = tieredHeadroomAnnualValue(state, flows, WHOLE_HOME_SOLAR_KW); break;
+      case "self_consume": headroomPerYear = 0; break;
+      case "vpp":          headroomPerYear = VPP_ANNUAL_BENEFIT; break;
+      case "wholesale":    headroomPerYear = tieredHeadroomAnnualValue(state, flows, WHOLE_HOME_SOLAR_KW); break;
     }
-    batteryCredit = perYear * years;
+    batteryCredit = (fitExportPerYear + batteryToHomePerYear + headroomPerYear) * years;
     batteryCapex = BATTERY_COST_PER_KWH * WHOLE_HOME_BATTERY_KWH + BATTERY_INSTALLATION_COST;
   }
 
   const applianceCapex = APPLIANCE_CAPEX.spaceHeatingHeatPump +
                          APPLIANCE_CAPEX.waterHeatingHeatPump +
-                         APPLIANCE_CAPEX.cooktopInduction;
+                         APPLIANCE_CAPEX.cooktopInduction +
+                         SWITCHBOARD_UPGRADE_CAPEX;
   const vehicleCapex   = vehicleCount > 0
     ? VEHICLE_OPTION_DATA[vehicleOption].evCapex * vehicleCount
     : 0;
   const pvCapex        = solarSystemCapex(state, WHOLE_HOME_SOLAR_KW, solarScenario, years);
-  const totalCapex     = applianceCapex + vehicleCapex + pvCapex + batteryCapex;
+  // PV + battery capex are always treated as cash, even under the loan toggle.
+  // Mirrors R evaluate_household: `total_solar_capex` and `scen_battery_capex`
+  // are added directly to `total_cost`, not run through annual_loan_payment.
+  // Only appliances + vehicles + switchboard are amortised via the loan.
+  const financeableCapex = applianceCapex + vehicleCapex;
+  const cashOnlyCapex    = pvCapex + batteryCapex;
 
   // 1-year view is operating-cost only at current prices (no capex, no finance).
-  const { capital, interest } = period === "1year"
-    ? { capital: 0, interest: 0 }
-    : computeCapitalAndInterest(totalCapex, inputs, years);
+  let capital = 0;
+  let interest = 0;
+  if (period !== "1year") {
+    const fin = computeCapitalAndInterest(financeableCapex, inputs, years);
+    capital  = fin.capital + cashOnlyCapex;
+    interest = fin.interest;
+  }
 
   // Battery credit reduces the electricity column. Keep it floored at 0 so
   // the chart doesn't render a negative segment.
@@ -630,12 +667,14 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
   }
   let volumeCost: number;
   if (category === "Vehicles" && option.fuel === "electricity") {
-    // EV home charging at off-peak (R: ev_tariff = "home_off_peak").
+    // EV home charging — dedicated EV tariff or off-peak retail per the
+    // household's evTariff toggle. Mirrors R ev_tariff "ev_dedicated" /
+    // "home_off_peak".
     const homeGridKwhDay = homeKwhDay - solarKwhDay;
-    const offPeakPrice   = priceFor(state, "electricity_off_peak", period);
+    const evHomePriceKwh = evHomeChargePriceKwh(state, period, base.evTariff);
     const fastPrice      = priceFor(state, "ev_fast_charge", period);
-    volumeCost = homeGridKwhDay * 365 * offPeakPrice.kwh * years
-               + fastKwhDay     * 365 * fastPrice.kwh    * years
+    volumeCost = homeGridKwhDay * 365 * evHomePriceKwh    * years
+               + fastKwhDay     * 365 * fastPrice.kwh     * years
                + solarLcoeCost(state, solarKwhDay, years);
   } else {
     const gridKwhDay = energyKwhDay - solarKwhDay;
@@ -644,13 +683,17 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
   }
 
   // --- Supply charge (proportional, per R) ---
+  // The all-electric denominator that drives the share uses the household's
+  // actual vehicle count (mirrors R evaluate_option, which threads n_vehicles
+  // through to get_elec_supply_share). The energy term itself stays at 1 car
+  // — we're costing one of this appliance, not the whole fleet.
   let gasSupply = 0;
   let elecSupply = 0;
   if (option.fuel === "electricity") {
     const includeVeh = category === "Vehicles";
     const share = getElecSupplyShare(
       state, occupants, category, includeVeh, vClass, drivingLevel,
-      SINGLE_OPTION_VEHICLE_COUNT,
+      effectiveVehicleCount(base),
     );
     const elecPrice = priceFor(state, "electricity", period);
     elecSupply = elecPrice.daily * days * share;
@@ -817,6 +860,11 @@ interface AnnualSolarBatteryFlows {
   headroomKwh: number;           // kWh/yr battery export headroom (evening peak)
   solarSelfConsumedKwh: number;  // kWh/yr direct daytime self-consumption
   batteryDischargeKwh: number;   // kWh/yr battery discharged to home loads
+  // Battery throughput. `batteryStoredKwh` is the AC-equivalent output of the
+  // battery (= total discharged kWh = batteryDischargeKwh + headroomKwh).
+  // Charge (DC-in) = batteryStoredKwh / BATTERY_ROUND_TRIP_EFFICIENCY — the
+  // PV-side draw that produced this output, including the round-trip loss.
+  batteryStoredKwh: number;
   // Per-season annualised headroom — needed for the tiered seasonal wholesale
   // valuation (each season uses its own peak_hour_1..4 prices).
   seasonalHeadroomKwh: Record<Season, number>;
@@ -919,6 +967,7 @@ function annualBatteryFlows(
   const emptySeasonal: Record<Season, number> = { summer: 0, autumn: 0, winter: 0, spring: 0 };
   const empty: AnnualSolarBatteryFlows = {
     exportKwh: 0, headroomKwh: 0, solarSelfConsumedKwh: 0, batteryDischargeKwh: 0,
+    batteryStoredKwh: 0,
     seasonalHeadroomKwh: { ...emptySeasonal },
   };
   if (solarKw <= 0) return empty;
@@ -940,6 +989,7 @@ function annualBatteryFlows(
   const daysPerSeason = 365 / 4;
   const totals: AnnualSolarBatteryFlows = {
     exportKwh: 0, headroomKwh: 0, solarSelfConsumedKwh: 0, batteryDischargeKwh: 0,
+    batteryStoredKwh: 0,
     seasonalHeadroomKwh: { ...emptySeasonal },
   };
 
@@ -947,7 +997,7 @@ function annualBatteryFlows(
     const row = batterySeasonRow({
       dailySolarKwh,
       dailyConsumptionKwh,
-      selfSufficiencyPct: Math.min(breakdown.totalPct, 1 - BATTERY_MIN_GRID_PCT),
+      selfSufficiencyPct: breakdown.totalPct,
       effectiveBatteryKwh,
       applianceLoad: breakdown.applianceLoad,
       applianceSolar: breakdown.applianceSolar,
@@ -958,12 +1008,15 @@ function annualBatteryFlows(
     totals.headroomKwh += seasonHeadroomKwh;
     totals.seasonalHeadroomKwh[s] = seasonHeadroomKwh;
     totals.solarSelfConsumedKwh += row.loadMetBySolarKwh * daysPerSeason;
-    // Battery → home: stored solar serves evening appliance load (not headroom).
-    // The discharge to home loads is `stored × rt_efficiency` minus what gets
-    // exported as headroom (already pre-deducted in arbitrage_headroom). The
-    // headroom is grid-bound, so subtract it before crediting load-serving.
+    totals.batteryStoredKwh += row.storedSolarKwh * daysPerSeason;
+    // Battery → home: usable (post-safeguard) stored solar that serves evening
+    // appliance load, minus the slice that went to the grid as headroom.
+    // Mirrors R: max(stored × (1 - safeguard) - arbitrage_headroom, 0). The
+    // safeguard reserve is held back for grid-outage backup and never reaches
+    // home appliance load, so we don't credit it here.
     const batteryToHome = Math.max(
-      row.storedSolarKwh - row.arbitrageHeadroomKwh,
+      row.storedSolarKwh * (1 - BATTERY_HOUSEHOLD_SAFEGUARD_PCT) -
+        row.arbitrageHeadroomKwh,
       0,
     );
     totals.batteryDischargeKwh += batteryToHome * daysPerSeason;
@@ -1000,7 +1053,7 @@ export function solarBatteryCapex(
 // solarExport:  surplus solar exported during the day × FiT
 // batteryToHome: stored solar discharged to home loads × retail price
 // batteryToGrid: battery export headroom × FiT or wholesale (mode-dependent)
-// vppBonus:     flat $400/yr × years (VPP mode only)
+// vppBonus:     flat VPP_ANNUAL_BENEFIT × years (VPP mode only)
 export interface SolarBatteryCost {
   capital: number;
   interest: number;
@@ -1104,8 +1157,17 @@ export interface WholeHomeBatteryDiagnostics {
   active: boolean;
   solarKw: number;
   batteryKwh: number;
-  headroomKwhPerYear: number;
-  exportKwhPerYear: number;
+  // Annual PV-side flow split. The four downstream values sum to the array's
+  // nameplate generation (sans round-trip losses on the battery leg):
+  //   generation = self-consumed + battery-charge + export + headroom
+  solarGenerationKwhPerYear: number;     // raw array output
+  solarSelfConsumedKwhPerYear: number;   // direct daytime → home
+  batteryChargeKwhPerYear: number;       // DC-in to the battery
+  exportKwhPerYear: number;              // daytime FiT export
+  headroomKwhPerYear: number;            // battery → grid surplus (evening peak)
+  // Battery discharge (AC-out): what the battery actually delivers to home +
+  // grid. Charge - discharge is the round-trip loss.
+  batteryDischargeKwhPerYear: number;
   fitPriceKwh: number;
   wholesalePriceKwh: number;       // blended avg ($/kWh) from the tiered valuation
   selfConsumeAnnualValue: number;  // 0
@@ -1118,8 +1180,12 @@ export function wholeHomeBatteryDiagnostics(inputs: HouseInputs): WholeHomeBatte
     active: false,
     solarKw: WHOLE_HOME_SOLAR_KW,
     batteryKwh: WHOLE_HOME_BATTERY_KWH,
-    headroomKwhPerYear: 0,
+    solarGenerationKwhPerYear: 0,
+    solarSelfConsumedKwhPerYear: 0,
+    batteryChargeKwhPerYear: 0,
     exportKwhPerYear: 0,
+    headroomKwhPerYear: 0,
+    batteryDischargeKwhPerYear: 0,
     fitPriceKwh: FIT_BY_STATE[inputs.state] ?? 0,
     wholesalePriceKwh: 0,
     selfConsumeAnnualValue: 0,
@@ -1133,12 +1199,21 @@ export function wholeHomeBatteryDiagnostics(inputs: HouseInputs): WholeHomeBatte
   const fit = FIT_BY_STATE[inputs.state] ?? 0;
   const wholesaleAnnual = tieredHeadroomAnnualValue(inputs.state, flows, WHOLE_HOME_SOLAR_KW);
   const blendedWholesale = flows.headroomKwh > 0 ? wholesaleAnnual / flows.headroomKwh : 0;
+  // Discharge = AC-out total (load-serving + headroom). Charge = DC-in draw
+  // = discharge / round-trip efficiency; the gap is the round-trip loss.
+  const dischargeKwh = flows.batteryStoredKwh;
+  const chargeKwh = dischargeKwh / BATTERY_ROUND_TRIP_EFFICIENCY;
+  const generationKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * WHOLE_HOME_SOLAR_KW * 365;
   return {
     active: true,
     solarKw: WHOLE_HOME_SOLAR_KW,
     batteryKwh: WHOLE_HOME_BATTERY_KWH,
-    headroomKwhPerYear: flows.headroomKwh,
+    solarGenerationKwhPerYear: generationKwh,
+    solarSelfConsumedKwhPerYear: flows.solarSelfConsumedKwh,
+    batteryChargeKwhPerYear: chargeKwh,
     exportKwhPerYear: flows.exportKwh,
+    headroomKwhPerYear: flows.headroomKwh,
+    batteryDischargeKwhPerYear: dischargeKwh,
     fitPriceKwh: fit,
     wholesalePriceKwh: blendedWholesale,
     // Self-consume: battery is not exported (headroom rolls over).
