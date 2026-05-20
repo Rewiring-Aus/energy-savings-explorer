@@ -39,10 +39,14 @@ const SEGMENT_LABELS = {
 type SegmentKey = keyof typeof SEGMENT_COLORS;
 const ORDER: SegmentKey[] = ["capital", "interest", "gas", "petrol", "electricity"];
 
-// Sub-$250 values round to the nearest $10 so small bars (e.g. annual
-// running cost of a cooktop) don't all collapse to the same printed figure.
+// Display rounding tiered to keep small numbers legible without implying
+// false precision on big ones:
+//   |n| < $250  → nearest $10  (so a $187 cooktop bill doesn't snap to $200)
+//   |n| < $500  → nearest $50
+//   otherwise  → nearest $100
 function roundForDisplay(n: number): number {
-  const step = Math.abs(n) < 250 ? 10 : 100;
+  const abs = Math.abs(n);
+  const step = abs < 250 ? 10 : abs < 500 ? 50 : 100;
   return Math.round(n / step) * step;
 }
 

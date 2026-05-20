@@ -12,6 +12,7 @@ import {
   BATTERY_ROUND_TRIP_EFFICIENCY,
   BATTERY_USEABLE_CAPACITY_PCT,
   BatterySizeKwh,
+  COOLING_ONLY_CAPEX,
   DrivingLevel,
   ENERGY_USE,
   EV_DEDICATED_DOL_KWH,
@@ -304,7 +305,11 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   const petrol      = petrolVolumeCost;
   const electricity = elecVolumeCost + elecSupplyCost;
 
-  const applianceCapex = fossilCapexHeating + fossilCapexWater + fossilCapexCooktop;
+  // Fossil-heated households still need cooling — add a standalone split-AC
+  // capex alongside the fossil heating + water + cooktop kit. Mirrors R model
+  // cooling_only_capex in evaluate_household. The cooling kWh is already in
+  // elecDemand above.
+  const applianceCapex = fossilCapexHeating + fossilCapexWater + fossilCapexCooktop + COOLING_ONLY_CAPEX;
   const vehicleCapex   = vehicleCount > 0
     ? VEHICLE_OPTION_DATA[vehicleOption].iceCapex * vehicleCount
     : 0;
@@ -430,21 +435,12 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
     ? VEHICLE_OPTION_DATA[vehicleOption].evCapex * vehicleCount
     : 0;
   const pvCapex        = solarSystemCapex(state, WHOLE_HOME_SOLAR_KW, solarScenario, years);
-  // PV + battery capex are always treated as cash, even under the loan toggle.
-  // Mirrors R evaluate_household: `total_solar_capex` and `scen_battery_capex`
-  // are added directly to `total_cost`, not run through annual_loan_payment.
-  // Only appliances + vehicles + switchboard are amortised via the loan.
-  const financeableCapex = applianceCapex + vehicleCapex;
-  const cashOnlyCapex    = pvCapex + batteryCapex;
+  const totalCapex     = applianceCapex + vehicleCapex + pvCapex + batteryCapex;
 
   // 1-year view is operating-cost only at current prices (no capex, no finance).
-  let capital = 0;
-  let interest = 0;
-  if (period !== "1year") {
-    const fin = computeCapitalAndInterest(financeableCapex, inputs, years);
-    capital  = fin.capital + cashOnlyCapex;
-    interest = fin.interest;
-  }
+  const { capital, interest } = period === "1year"
+    ? { capital: 0, interest: 0 }
+    : computeCapitalAndInterest(totalCapex, inputs, years);
 
   // Battery credit reduces the electricity column. Keep it floored at 0 so
   // the chart doesn't render a negative segment.

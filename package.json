@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "regression:ts": "vitest run scripts/regression-scenarios.test.ts",
+    "regression:r": "Rscript scripts/regression-scenarios.R"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

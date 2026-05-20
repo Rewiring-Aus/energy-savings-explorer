@@ -457,7 +457,7 @@ export const LARGE_SYSTEM_SOLAR_KWP = 10;
 export const SOLAR_KW_OPTIONS = [6.6, 10, 15] as const;
 export type SolarSizeKw = (typeof SOLAR_KW_OPTIONS)[number];
 
-export const BATTERY_KWH_OPTIONS = [15, 20, 40] as const;
+export const BATTERY_KWH_OPTIONS = [15, 20, 30, 40] as const;
 export type BatterySizeKwh = (typeof BATTERY_KWH_OPTIONS)[number];
 
 // Battery model parameters (battery_model.R)
@@ -610,6 +610,12 @@ export const APPLIANCE_CAPEX = {
   cooktopGas: 1200,
   cooktopLpg: 1200,
 };
+
+// Standalone split-system AC capex added to fossil-heated scenarios. All-
+// electric scenarios bundle cooling into the heat pump heating row (one unit
+// covers both), so no separate AC is needed there. Mirrors R model
+// cooling_only_capex.
+export const COOLING_ONLY_CAPEX = 2000;
 
 // One-off switchboard upgrade added to all-electric scenarios to cover the
 // cumulative load of heat pump heating + heat pump HW + induction + EV

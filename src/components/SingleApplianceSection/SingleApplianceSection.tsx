@@ -107,11 +107,14 @@ function findOption(category: ApplianceCategory, value: string): ApplianceOption
   return APPLIANCE_OPTIONS[category].find((o) => o.value === value);
 }
 
-// Sub-$250 values round to the nearest $10 so small bars (e.g. running cost
-// of a cooktop) don't all collapse to the same printed figure even when the
-// bars visibly differ.
+// Display rounding tiered to keep small numbers legible without implying
+// false precision on big ones:
+//   |n| < $250  → nearest $10  (so a $187 cooktop bill doesn't snap to $200)
+//   |n| < $500  → nearest $50
+//   otherwise  → nearest $100
 function roundForDisplay(n: number): number {
-  const step = Math.abs(n) < 250 ? 10 : 100;
+  const abs = Math.abs(n);
+  const step = abs < 250 ? 10 : abs < 500 ? 50 : 100;
   return Math.round(n / step) * step;
 }
 
@@ -312,7 +315,8 @@ const SAVINGS_KEYS: SbSegmentKey[] = [
 const BATTERY_VALUE_MODES: BatteryValueMode[] = ["self_consume", "vpp", "wholesale"];
 
 function sbRoundForDisplay(n: number): number {
-  const step = Math.abs(n) < 250 ? 10 : 100;
+  const abs = Math.abs(n);
+  const step = abs < 250 ? 10 : abs < 500 ? 50 : 100;
   return Math.round(n / step) * step;
 }
 
