@@ -10,6 +10,10 @@ export interface ChartBar {
 
 interface Props {
   title: string;
+  // Small grey text rendered inside the chart card below the legend. Use it
+  // for assumptions / definitions that frame the numbers (e.g. PV+battery
+  // size on chart 1).
+  footer?: React.ReactNode;
   bars: ChartBar[];
   // When true and exactly 2 bars are supplied, render a "savings" call-out
   // box to the right of the chart showing the difference between bar[0]
@@ -302,7 +306,7 @@ const SavingsBox: React.FC<{ savings: number; years: number }> = ({ savings, yea
   );
 };
 
-const ComparisonChart: React.FC<Props> = ({ title, bars, showSavingsBox, years = 1 }) => {
+const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox, years = 1 }) => {
   const theme = useTheme();
   // Y-axis is the actual peak across columns — the tallest bar fills the
   // chart, every other bar scales against the same reference.
@@ -359,6 +363,20 @@ const ComparisonChart: React.FC<Props> = ({ title, bars, showSavingsBox, years =
         {showSavings && <SavingsBox savings={savings} years={years} />}
       </Box>
       <Legend />
+      {footer && (
+        <Typography
+          variant="caption"
+          sx={{
+            display: "block",
+            mt: 1.5,
+            color: "#666",
+            fontSize: "0.78rem",
+            lineHeight: 1.4,
+          }}
+        >
+          {footer}
+        </Typography>
+      )}
     </Box>
   );
 };

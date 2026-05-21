@@ -13,8 +13,10 @@ import {
   APPLIANCE_OPTIONS,
   BatteryValueMode,
   HouseInputs,
+  Period,
   SolarScenario,
   SolarBatteryCost,
+  SOLAR_FRACTION_BY_SCENARIO,
   availableOptions,
   evaluateSingleOption,
   evaluateSolarBatteryBreakdown,
@@ -24,8 +26,16 @@ import {
 import {
   BATTERY_KWH_OPTIONS,
   BatterySizeKwh,
+  EV_DEDICATED_DOL_KWH,
+  FAST_CHARGE_FRACTION,
+  FIT_BY_STATE,
+  Fuel,
+  FUEL_PRICES,
   SOLAR_KW_OPTIONS,
+  SOLAR_LCOE_BY_STATE,
   SolarSizeKw,
+  StateCode,
+  VPP_ANNUAL_BENEFIT,
 } from "src/comparison/data";
 
 interface Props {
@@ -59,7 +69,7 @@ function efficientElectricValue(category: ApplianceCategory): string {
 // Display name for the efficient electric option, used in the savings headline
 // (e.g. "Heat pump savings vs gas hot water"). Kept short on purpose.
 const ELECTRIC_LABEL: Record<ApplianceCategory, string> = {
-  "Space Heating": "Heat pump",
+  "Space Heating": "Air conditioner",
   "Water Heating": "Heat pump",
   "Cooktop":       "Induction",
   "Vehicles":      "EV",
@@ -518,7 +528,8 @@ const SolarBatteryChart: React.FC<{
   solarKw: SolarSizeKw;
   batteryKwh: BatterySizeKwh;
   title: string;
-}> = ({ baseInputs, solarKw, batteryKwh, title }) => {
+  footer?: React.ReactNode;
+}> = ({ baseInputs, solarKw, batteryKwh, title, footer }) => {
   const years = baseInputs.period === "1year" ? 1 : 15;
   const sb = {
     solarKw, batteryKwh,
@@ -592,6 +603,8 @@ const SolarBatteryChart: React.FC<{
         ))}
       </Box>
       <SbLegend />
+
+      {footer}
 
       {/* TEMPORARY DIAGNOSTIC: underlying energy flows per column.
           Same numeric flows feed all 3 columns; only the headroom row varies
@@ -711,6 +724,173 @@ const EnergyDiagnosticTable: React.FC<{
           ))}
         </Box>
       )}
+    </Box>
+  );
+};
+
+// --- Chart-2 footer: assumptions + tariff summary -------------------------
+// Lays out (a) the self-consumption percentages baked into the bars for the
+// current category + solar scenario and (b) the tariff rates being applied
+// at the current period (1-yr current or 15-yr forecast). Lets the user see
+// exactly why the bars look the way they do without spelunking the model.
+
+function pct(n: number): string {
+  return `${Math.round(n * 100)}%`;
+}
+
+function centsKwh(n: number | undefined | null): string {
+  if (n == null) return "—";
+  return `${(n * 100).toFixed(1)}¢/kWh`;
+}
+
+function dailyFee(n: number | undefined | null): string {
+  if (n == null || n === 0) return "";
+  return ` + $${n.toFixed(2)}/day`;
+}
+
+function periodPrice(state: StateCode, fuel: Fuel, period: Period):
+  | { kwh: number; daily: number }
+  | null {
+  const row = FUEL_PRICES[state]?.[fuel];
+  if (!row) return null;
+  return period === "1year"
+    ? { kwh: row.current, daily: row.dailyToday }
+    : { kwh: row.forecast15yr, daily: row.daily15yr };
+}
+
+const footerLineSx = {
+  display: "block",
+  color: "#666",
+  fontSize: "0.75rem",
+  lineHeight: 1.5,
+};
+
+const ChartFooter: React.FC<{
+  category: Category;
+  baseInputs: HouseInputs;
+  solarKw: SolarSizeKw;
+  batteryKwh: BatterySizeKwh;
+}> = ({ category, baseInputs, solarKw, batteryKwh }) => {
+  const { state, solarScenario: scenario, period, evTariff } = baseInputs;
+  const frac = SOLAR_FRACTION_BY_SCENARIO[scenario];
+  const scenLabel = SCENARIO_LABEL[scenario].toLowerCase();
+  const periodLabel = period === "1year"
+    ? "today's prices"
+    : "15-year forecast average";
+
+  // ---- Solar+Battery: explain the three modes + retail/FiT ----
+  if (category === "Solar+Battery") {
+    const retail = periodPrice(state, "electricity", period);
+    const fit = FIT_BY_STATE[state];
+    return (
+      <Box sx={{ mt: 1.5 }}>
+        <Typography variant="caption" sx={footerLineSx}>
+          Self-consumption is derived from your household's appliance + EV load
+          (from the right-hand panel) at the {solarKw} kW solar + {batteryKwh} kWh
+          battery sizing above.
+        </Typography>
+        <Typography variant="caption" sx={footerLineSx}>
+          Battery export modes — <strong>Self-consume</strong>: headroom rolls
+          into the next day (no grid export); <strong>VPP</strong>: flat
+          ${VPP_ANNUAL_BENEFIT}/yr membership benefit; <strong>Wholesale</strong>:
+          headroom valued at the tiered seasonal 4–8 pm evening-peak schedule
+          (per-hour cap = inverter size).
+        </Typography>
+        <Typography variant="caption" sx={footerLineSx}>
+          Tariffs ({periodLabel}): retail electricity {centsKwh(retail?.kwh)},
+          feed-in tariff {centsKwh(fit)}.
+        </Typography>
+      </Box>
+    );
+  }
+
+  // ---- Vehicles ----
+  if (category === "Vehicles") {
+    const petrol = periodPrice(state, "petrol", period);
+    const diesel = periodPrice(state, "diesel", period);
+    const offPeak = periodPrice(state, "electricity_off_peak", period);
+    const fast = periodPrice(state, "ev_fast_charge", period);
+    const evTariffLabel = evTariff === "ev"
+      ? `dedicated EV plan ${centsKwh(EV_DEDICATED_DOL_KWH)}`
+      : `off-peak retail ${centsKwh(offPeak?.kwh)}`;
+    return (
+      <Box sx={{ mt: 1.5 }}>
+        {scenario !== "grid_only" && (
+          <Typography variant="caption" sx={footerLineSx}>
+            Solar self-consumption: {pct(frac.vehicles)} of home-charged EV kWh
+            served by rooftop solar ({scenLabel}). {pct(FAST_CHARGE_FRACTION)} of
+            all EV charging is at public DC fast chargers — those kWh don't
+            pass through the home meter and aren't eligible for solar.
+          </Typography>
+        )}
+        {scenario === "grid_only" && (
+          <Typography variant="caption" sx={footerLineSx}>
+            EV charging mix: {pct(FAST_CHARGE_FRACTION)} at public DC fast
+            chargers, {pct(1 - FAST_CHARGE_FRACTION)} at home.
+          </Typography>
+        )}
+        <Typography variant="caption" sx={footerLineSx}>
+          Tariffs ({periodLabel}): petrol {centsKwh(petrol?.kwh)},
+          diesel {centsKwh(diesel?.kwh)}, EV home charging on{" "}
+          {evTariffLabel}, public fast charge {centsKwh(fast?.kwh)}.
+        </Typography>
+      </Box>
+    );
+  }
+
+  // ---- Space Heating / Water Heating / Cooktop ----
+  const gas = periodPrice(state, "gas", period);
+  const lpg = periodPrice(state, "lpg", period);
+  const elec = periodPrice(state, "electricity", period);
+  const lcoe = SOLAR_LCOE_BY_STATE[state];
+
+  let solarLine: React.ReactNode = null;
+  if (scenario !== "grid_only") {
+    if (category === "Space Heating") {
+      solarLine = (
+        <>
+          Solar self-consumption ({scenLabel}): the air conditioner bundles{" "}
+          {pct(frac.spaceHeating)} of heating + {pct(frac.spaceCooling)} of
+          cooling kWh met by rooftop solar. Resistive heaters: {pct(frac.spaceHeating)}.
+        </>
+      );
+    } else if (category === "Water Heating") {
+      solarLine = (
+        <>
+          Solar self-consumption ({scenLabel}): heat pump hot water{" "}
+          {pct(frac.waterHeating)} solar; electric resistance tank{" "}
+          {pct(frac.waterHeatingResistance)} solar.
+        </>
+      );
+    } else {
+      // Cooktop
+      solarLine = (
+        <>
+          Solar self-consumption ({scenLabel}): {pct(frac.cooktop)} of cooktop
+          kWh met by rooftop solar.
+        </>
+      );
+    }
+  }
+
+  const tariffParts: string[] = [];
+  if (gas) tariffParts.push(`gas ${centsKwh(gas.kwh)}${dailyFee(gas.daily)}`);
+  if (lpg) tariffParts.push(`LPG ${centsKwh(lpg.kwh)}${dailyFee(lpg.daily)}`);
+  if (elec) tariffParts.push(`electricity ${centsKwh(elec.kwh)}${dailyFee(elec.daily)}`);
+  if (scenario !== "grid_only") {
+    tariffParts.push(`self-consumed solar ${centsKwh(lcoe)} (LCOE)`);
+  }
+
+  return (
+    <Box sx={{ mt: 1.5 }}>
+      {solarLine && (
+        <Typography variant="caption" sx={footerLineSx}>
+          {solarLine}
+        </Typography>
+      )}
+      <Typography variant="caption" sx={footerLineSx}>
+        Tariffs ({periodLabel}): {tariffParts.join(", ")}.
+      </Typography>
     </Box>
   );
 };
@@ -908,9 +1088,28 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
             solarKw={solarKw}
             batteryKwh={batteryKwh}
             title={title}
+            footer={
+              <ChartFooter
+                category={category}
+                baseInputs={baseInputs}
+                solarKw={solarKw}
+                batteryKwh={batteryKwh}
+              />
+            }
           />
         ) : (
-          <ComparisonChart title={title} bars={bars} />
+          <ComparisonChart
+            title={title}
+            bars={bars}
+            footer={
+              <ChartFooter
+                category={category}
+                baseInputs={baseInputs}
+                solarKw={solarKw}
+                batteryKwh={batteryKwh}
+              />
+            }
+          />
         )}
       </Box>
     </Box>

@@ -283,20 +283,19 @@ export const EV_DEDICATED_DOL_KWH = 0.08;
 
 // ---------------------------------------------------------------------------
 // solar_lcoe_by_state.csv — levelised cost ($/kWh) of self-generated solar.
-// Uses the 8.8% interest-rate row (typical green-loan rate, matches R model
-// SOLAR_LCOE_INTEREST_RATE = "8.8%").
+// Uses the 8% interest-rate row (matches R model SOLAR_LCOE_INTEREST_RATE).
 // ---------------------------------------------------------------------------
 
 export const SOLAR_LCOE_BY_STATE: Record<StateCode, number> = {
-  AUS: 0.0401,   // "AUS (pop-weighted)" row in CSV
-  NSW: 0.0382,
-  VIC: 0.0466,
-  QLD: 0.0350,
-  SA:  0.0400,
-  WA:  0.0346,
-  TAS: 0.0625,
-  ACT: 0.0356,
-  NT:  0.0498,
+  AUS: 0.0315,   // "AUS (pop-weighted)" row in CSV
+  NSW: 0.0300,
+  VIC: 0.0358,
+  QLD: 0.0268,
+  SA:  0.0316,
+  WA:  0.0296,
+  TAS: 0.0510,
+  ACT: 0.0245,
+  NT:  0.0474,
 };
 
 // ---------------------------------------------------------------------------
@@ -358,18 +357,23 @@ export const APARTMENT_ENERGY_FACTOR = 0.79;
 //   evening_peak_prices_annual.csv    (median wholesale 4–8 pm price)
 // ---------------------------------------------------------------------------
 
-// Solar PV cost ($/kW installed) — varies by state (Tipping point CSV).
+// Solar PV cost ($/kW installed) — varies by state. Sourced from the 8%
+// interest-rate row of solar_lcoe_by_state.csv (which is what the R model
+// reads via SOLAR_LCOE_INTEREST_RATE). 4-decimal precision for the
+// pop-weighted AUS row; integer for the per-state rows (CSV is integer there).
 export const SOLAR_PV_COST_PER_KW: Record<StateCode, number> = {
-  AUS: 864, ACT: 780, NSW: 815, NT: 1496, QLD: 886,
-  SA: 872, TAS: 1098, VIC: 872, WA: 851,
+  AUS: 690.3472, ACT: 533, NSW: 649, NT: 1490, QLD: 689,
+  SA:  701,      TAS: 921, VIC: 679, WA: 750,
 };
 
 // Solar generation per kW per day, derived from the per-state capacity factor
 // in solar_lcoe_by_state.csv (capacity_factor × 24 h). Year-1 figures —
 // matches the 0.04 first-year degradation default in battery_model.R.
+// 4-decimal precision to keep displayed totals within ~$10 of R's output;
+// the raw CSV capacity factors run to 6+ decimals.
 export const SOLAR_DAILY_KWH_PER_KW: Record<StateCode, number> = {
-  AUS: 4.39, NSW: 4.31, ACT: 4.45, NT:  5.78, QLD: 5.07,
-  SA:  4.38, TAS: 3.45, VIC: 3.76, WA:  4.95,
+  AUS: 4.3859, NSW: 4.3126, ACT: 4.4549, NT:  5.7797, QLD: 5.0715,
+  SA:  4.3782, TAS: 3.4516, VIC: 3.7567, WA:  4.9536,
 };
 
 // One-off battery installation cost (per Tipping point CSV, row "Battery installation").

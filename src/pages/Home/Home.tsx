@@ -221,14 +221,30 @@ const Home: React.FC = () => {
             </Box>
           </Box>
           <ComparisonChart
-            title={
-              result.years === 1
-                ? "Whole home — 1 year operating cost (current prices)"
-                : `Whole home — total cost over ${result.years} years`
-            }
+            title={(() => {
+              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
+              return result.years === 1
+                ? `Whole ${noun} — 1 year operating cost (current prices)`
+                : `Whole ${noun} — total cost over ${result.years} years`;
+            })()}
+            footer={(() => {
+              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
+              // Numbers pronounced starting with a vowel take "an": 8 (eight),
+              // 11 (eleven), 18 (eighteen), and any multiple starting with
+              // those digits (80, 800, 1800…). All other leading digits → "a".
+              const s = String(batteryDiag.batteryKwh);
+              const battArticle = /^(8|11|18)/.test(s) ? "an" : "a";
+              return `The all-electric ${noun} has ${batteryDiag.solarKw} kW of rooftop solar and ${battArticle} ${batteryDiag.batteryKwh} kWh battery. Electricity costs include costs and credits.`;
+            })()}
             bars={[
-              { label: "All-gas home", cost: result.gas },
-              { label: "All-electric home", cost: result.electric },
+              {
+                label: `All-gas ${inputs.dwelling === "apartment" ? "apartment" : "house"}`,
+                cost: result.gas,
+              },
+              {
+                label: `All-electric ${inputs.dwelling === "apartment" ? "apartment" : "house"}`,
+                cost: result.electric,
+              },
             ]}
             showSavingsBox
             years={result.years}

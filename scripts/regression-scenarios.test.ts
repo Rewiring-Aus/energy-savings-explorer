@@ -20,17 +20,21 @@ interface Scenario {
 // 10 scenarios covering: state variation, finance, all three solar modes,
 // vehicle toggle, dwelling type, occupancy. All other inputs sit at
 // DEFAULT_INPUTS (1.8 BYD Dolphin, EV tariff, wholesale battery, 200-300 km).
+//
+// finance and solarScenario are pinned per-row so this suite stays anchored
+// even when DEFAULT_INPUTS shifts (it landed on loan + solar_optimised on
+// 2026-05-18; rows still need to test cash / grid_only / solar regardless).
 const SCENARIOS: Scenario[] = [
-  { id: "S01", description: "AUS / 15yr cash / grid only",        overrides: {} },
-  { id: "S02", description: "AUS / 15yr loan / grid only",        overrides: { finance: true } },
-  { id: "S03", description: "AUS / 15yr cash / solar",            overrides: { solarScenario: "solar" } },
-  { id: "S04", description: "AUS / 15yr loan / solar",            overrides: { finance: true, solarScenario: "solar" } },
-  { id: "S05", description: "AUS / 15yr cash / solar_optimised",  overrides: { solarScenario: "solar_optimised" } },
-  { id: "S06", description: "NSW / 15yr cash / solar",            overrides: { state: "NSW", solarScenario: "solar" } },
-  { id: "S07", description: "WA / 15yr cash / grid only",         overrides: { state: "WA" } },
-  { id: "S08", description: "NT / 15yr cash / grid only (LPG)",   overrides: { state: "NT" } },
-  { id: "S09", description: "AUS no-car / 15yr cash / solar",     overrides: { vehicleOption: "no_car", vehicles: 0, solarScenario: "solar" } },
-  { id: "S10", description: "AUS apartment / 1 occ / 15yr cash / solar", overrides: { dwelling: "apartment", occupants: 1, solarScenario: "solar" } },
+  { id: "S01", description: "AUS / 15yr cash / grid only",        overrides: { finance: false, solarScenario: "grid_only" } },
+  { id: "S02", description: "AUS / 15yr loan / grid only",        overrides: { finance: true,  solarScenario: "grid_only" } },
+  { id: "S03", description: "AUS / 15yr cash / solar",            overrides: { finance: false, solarScenario: "solar" } },
+  { id: "S04", description: "AUS / 15yr loan / solar",            overrides: { finance: true,  solarScenario: "solar" } },
+  { id: "S05", description: "AUS / 15yr cash / solar_optimised",  overrides: { finance: false, solarScenario: "solar_optimised" } },
+  { id: "S06", description: "NSW / 15yr cash / solar",            overrides: { finance: false, solarScenario: "solar", state: "NSW" } },
+  { id: "S07", description: "WA / 15yr cash / grid only",         overrides: { finance: false, solarScenario: "grid_only", state: "WA" } },
+  { id: "S08", description: "NT / 15yr cash / grid only (LPG)",   overrides: { finance: false, solarScenario: "grid_only", state: "NT" } },
+  { id: "S09", description: "AUS no-car / 15yr cash / solar",     overrides: { finance: false, solarScenario: "solar", vehicleOption: "no_car", vehicles: 0 } },
+  { id: "S10", description: "AUS apartment / 1 occ / 15yr cash / solar", overrides: { finance: false, solarScenario: "solar", dwelling: "apartment", occupants: 1 } },
 ];
 
 function round0(n: number): number {

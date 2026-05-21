@@ -73,24 +73,29 @@ interface SolarFractionByAppliance {
 const OTHER_FRAC_SOLAR = 1 / 3;
 export const SOLAR_FRACTION_BY_SCENARIO: Record<SolarScenario, SolarFractionByAppliance> = {
   grid_only:       { spaceHeating: 0,    waterHeating: 0,    waterHeatingResistance: 0,    spaceCooling: 0,    cooktop: 0,    vehicles: 0,    other: 0 },
-  solar:           { spaceHeating: 0.15, waterHeating: 0.50, waterHeatingResistance: 0.30, spaceCooling: 0.40, cooktop: 0.10, vehicles: 0.20, other: OTHER_FRAC_SOLAR },
-  solar_optimised: { spaceHeating: 0.30, waterHeating: 0.85, waterHeatingResistance: 0.70, spaceCooling: 0.65, cooktop: 0.10, vehicles: 0.45, other: OTHER_FRAC_SOLAR },
+  solar:           { spaceHeating: 0.15, waterHeating: 0.50, waterHeatingResistance: 0.30, spaceCooling: 0.40, cooktop: 0.10, vehicles: 0.10, other: OTHER_FRAC_SOLAR },
+  solar_optimised: { spaceHeating: 0.30, waterHeating: 0.85, waterHeatingResistance: 0.70, spaceCooling: 0.65, cooktop: 0.10, vehicles: 0.25, other: OTHER_FRAC_SOLAR },
 };
 
 // Solar PV capex is now sized: state-specific $/kW × system kW (matches the
 // per-state Tipping point CSV row "Solar PV cost per kW"). Chart 1 uses the
-// fixed WHOLE_HOME_SOLAR_KW below; chart 2 uses the user's solar-size toggle.
+// dwelling-aware preset below; chart 2 uses the user's solar-size toggle.
 // The inverter replacement at year 12 is unchanged.
 export const INVERTER_REPLACEMENT_COST = 1800;
 export const INVERTER_REPLACEMENT_YEAR = 12;
 
-// Whole-home chart assumes a typical household solar+battery setup whenever
-// the user is on "solar" or "solar_optimised" — a 10 kW PV array (capex
-// priced at the state's $/kW from SOLAR_PV_COST_PER_KW) and a 12 kWh
-// battery. The battery export credit is what makes the "Battery export"
-// toggle on chart 1 meaningful.
-export const WHOLE_HOME_SOLAR_KW = 10;
-export const WHOLE_HOME_BATTERY_KWH = 15;
+// Whole-home chart assumes a typical solar+battery setup whenever the user
+// is on "solar" or "solar_optimised". Sizing varies by dwelling — a detached
+// house has the roof + cumulative load for a 10 kW + 15 kWh setup; an
+// apartment is a smaller roof + smaller load, so a 5 kW + 8 kWh sizing is
+// more representative. Capex is priced at the state's $/kW from
+// SOLAR_PV_COST_PER_KW × the preset kW. The battery export credit is what
+// makes the "Battery export" toggle on chart 1 meaningful.
+export function wholeHomePreset(dwelling: DwellingType): { solarKw: number; batteryKwh: number } {
+  return dwelling === "apartment"
+    ? { solarKw: 5,  batteryKwh: 8  }
+    : { solarKw: 10, batteryKwh: 15 };
+}
 
 // How the home battery's exports are valued. "Self-consume" assumes any
 // stored solar that can't be self-consumed is exported at the FiT (no VPP /
@@ -129,11 +134,11 @@ export const DEFAULT_INPUTS: HouseInputs = {
   vehicleOption: "byd_dolphin",
   drivingLevel: "middle", // state-average km/day (R model default)
   dwelling: "house",
-  finance: false,
+  finance: true,
   period: "15year",
   loanRate: 0.07,         // matches R evaluate_household() loan_rate default
   loanTerm: 10,
-  solarScenario: "grid_only",
+  solarScenario: "solar_optimised",
   batteryValue: "wholesale",
   evTariff: "ev",
 };
@@ -208,9 +213,10 @@ function hasNaturalGas(state: StateCode): boolean {
 }
 
 // PV system capex over the analysis horizon: state-specific $/kW × system kW
-// plus one inverter replacement if the horizon reaches year 12. Returns 0
-// under grid_only. Mirrors solarBatteryCapex() so chart 1 and chart 2 use
-// the same per-state hardware pricing.
+// + initial inverter unit + mid-life replacement at year 12 (only when the
+// horizon is at least that long). Returns 0 under grid_only. Mirrors R model
+// has_solar_or_battery inverter accounting in evaluate_solar_battery — both
+// units are charged whenever the household has solar or a battery.
 function solarSystemCapex(
   state: StateCode,
   solarKw: number,
@@ -219,8 +225,8 @@ function solarSystemCapex(
 ): number {
   if (scenario === "grid_only") return 0;
   const pv = SOLAR_PV_COST_PER_KW[state] * solarKw;
-  const replacement = years >= INVERTER_REPLACEMENT_YEAR ? INVERTER_REPLACEMENT_COST : 0;
-  return pv + replacement;
+  const inverterUnits = years >= INVERTER_REPLACEMENT_YEAR ? 2 : 1;
+  return pv + inverterUnits * INVERTER_REPLACEMENT_COST;
 }
 
 // Capex amortises over the 15-year product lifetime: the 1-year view shows
@@ -339,6 +345,7 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
   const vehicleCount = effectiveVehicleCount(inputs);
   const vClass = vehicleClassFromOption(vehicleOption);
   const km = kmPerDay(state, drivingLevel);
+  const { solarKw: presetSolarKw, batteryKwh: presetBatteryKwh } = wholeHomePreset(dwelling);
 
   const heatingKwh = energy("Space Heating", "Electric heat pump", state) * occScale * dwScale;
   const coolingKwh = energy("Space Cooling", "Heat pump",          state) * occScale * dwScale;
@@ -375,7 +382,7 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
     cooktopKwh   * frac.cooktop +
     otherKwh     * frac.other +
     evHomeKwhDay * frac.vehicles;
-  const pvDailyKwh = SOLAR_DAILY_KWH_PER_KW[state] * WHOLE_HOME_SOLAR_KW;
+  const pvDailyKwh = SOLAR_DAILY_KWH_PER_KW[state] * presetSolarKw;
   const solarScale = solarScenario === "grid_only" || solarDemandKwhDay === 0
     ? 1
     : solarDemandKwhDay > pvDailyKwh
@@ -413,7 +420,7 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
   let batteryCredit = 0;
   let batteryCapex = 0;
   if (solarScenario !== "grid_only") {
-    const flows = annualBatteryFlows(inputs, WHOLE_HOME_SOLAR_KW, WHOLE_HOME_BATTERY_KWH, years);
+    const flows = annualBatteryFlows(inputs, presetSolarKw, presetBatteryKwh, years);
     const fit = FIT_BY_STATE[state] ?? 0;
     const fitExportPerYear     = flows.exportKwh * fit;
     const batteryToHomePerYear = flows.batteryDischargeKwh * elecPrice.kwh;
@@ -421,10 +428,14 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
     switch (inputs.batteryValue) {
       case "self_consume": headroomPerYear = 0; break;
       case "vpp":          headroomPerYear = VPP_ANNUAL_BENEFIT; break;
-      case "wholesale":    headroomPerYear = tieredHeadroomAnnualValue(state, flows, WHOLE_HOME_SOLAR_KW); break;
+      case "wholesale":    headroomPerYear = tieredHeadroomAnnualValue(state, flows, presetSolarKw); break;
     }
     batteryCredit = (fitExportPerYear + batteryToHomePerYear + headroomPerYear) * years;
-    batteryCapex = BATTERY_COST_PER_KWH * WHOLE_HOME_BATTERY_KWH + BATTERY_INSTALLATION_COST;
+    // Chart 1 always pairs the home battery with a fresh PV install, so the
+    // install crew is already on site and the marginal battery installation
+    // cost is 0. Mirrors R evaluate_solar_battery:
+    // installation_cost <- if (solar_kwp > 0) 0 else binfo$installation.
+    batteryCapex = BATTERY_COST_PER_KWH * presetBatteryKwh;
   }
 
   const applianceCapex = APPLIANCE_CAPEX.spaceHeatingHeatPump +
@@ -434,7 +445,7 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
   const vehicleCapex   = vehicleCount > 0
     ? VEHICLE_OPTION_DATA[vehicleOption].evCapex * vehicleCount
     : 0;
-  const pvCapex        = solarSystemCapex(state, WHOLE_HOME_SOLAR_KW, solarScenario, years);
+  const pvCapex        = solarSystemCapex(state, presetSolarKw, solarScenario, years);
   const totalCapex     = applianceCapex + vehicleCapex + pvCapex + batteryCapex;
 
   // 1-year view is operating-cost only at current prices (no capex, no finance).
@@ -487,7 +498,7 @@ export const APPLIANCE_OPTIONS: Record<ApplianceCategory, ApplianceOption[]> = {
     { value: "Natural gas",         label: "Gas",               fuel: "gas",         capex: 1500 },
     { value: "LPG",                 label: "LPG",               fuel: "lpg",         capex: 1500 },
     { value: "Electric resistance", label: "Electric resistive",fuel: "electricity", capex: 220 },
-    { value: "Electric heat pump",  label: "Heat pump (A/C)",   fuel: "electricity", capex: 3200 },
+    { value: "Electric heat pump",  label: "Air conditioner",   fuel: "electricity", capex: 3200 },
   ],
   "Water Heating": [
     { value: "Natural gas",         label: "Gas instant",       fuel: "gas",         capex: 1700 },
@@ -948,6 +959,73 @@ export function solarBatteryEnergyFlows(
   };
 }
 
+// Diagnostic — per-season battery model output. Mirrors what R returns as
+// sb$battery_seasonal so the two implementations can be diffed row-by-row.
+// All values are PER DAY for that season (R reports the same way).
+export interface SeasonalBatteryRow {
+  season: Season;
+  solar_multiplier: number;
+  daily_solar_generation_kwh: number;
+  appliance_solar_kwh: number;     // daily appliance kWh met by solar (pre-cap)
+  load_met_by_solar_kwh: number;   // daily total kWh met by solar (incl. EV)
+  stored_solar_kwh: number;
+  export_kwh: number;
+  arbitrage_headroom_kwh: number;
+  battery_to_home_kwh: number;     // max(stored × (1 - safeguard) - headroom, 0)
+}
+
+export function seasonalBatteryTrace(
+  inputs: HouseInputs,
+  solarKw: number,
+  batteryKwh: number,
+): SeasonalBatteryRow[] {
+  const years = inputs.period === "1year" ? 1 : 15;
+  if (solarKw <= 0) return [];
+  const dailySolarKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * solarKw;
+  const breakdown = householdSelfSufficiency(inputs);
+  const dailyConsumptionKwh = breakdown.applianceLoad + breakdown.vehicleLoad;
+  if (dailyConsumptionKwh === 0) return [];
+
+  const degradation = years >= 15 ? BATTERY_DEGRADATION_15YR_AVG : BATTERY_DEGRADATION_1YR;
+  const effectiveBatteryKwh =
+    batteryKwh > 0
+      ? batteryKwh * BATTERY_USEABLE_CAPACITY_PCT * Math.pow(1 - degradation, years)
+      : 0;
+
+  const weights = SEASONAL_SOLAR_WEIGHTS;
+  const meanWeight = (weights.spring + weights.summer + weights.autumn + weights.winter) / 4;
+  const seasons: Season[] = ["spring", "summer", "autumn", "winter"];
+
+  return seasons.map((s) => {
+    const solarMultiplier = weights[s] / meanWeight;
+    const row = batterySeasonRow({
+      dailySolarKwh,
+      dailyConsumptionKwh,
+      selfSufficiencyPct: breakdown.totalPct,
+      effectiveBatteryKwh,
+      applianceLoad: breakdown.applianceLoad,
+      applianceSolar: breakdown.applianceSolar,
+      solarMultiplier,
+    });
+    const batteryToHome = Math.max(
+      row.storedSolarKwh * (1 - BATTERY_HOUSEHOLD_SAFEGUARD_PCT) -
+        row.arbitrageHeadroomKwh,
+      0,
+    );
+    return {
+      season: s,
+      solar_multiplier: solarMultiplier,
+      daily_solar_generation_kwh: dailySolarKwh * solarMultiplier,
+      appliance_solar_kwh: breakdown.applianceSolar,
+      load_met_by_solar_kwh: row.loadMetBySolarKwh,
+      stored_solar_kwh: row.storedSolarKwh,
+      export_kwh: row.exportKwh,
+      arbitrage_headroom_kwh: row.arbitrageHeadroomKwh,
+      battery_to_home_kwh: batteryToHome,
+    };
+  });
+}
+
 // Annualised solar + battery flows under the seasonal model. Returns the
 // four kWh streams the chart needs to value separately:
 //   solar self-consumed  → savings at retail
@@ -1034,10 +1112,21 @@ export function solarBatteryCapex(
   let capex = 0;
   if (solarKw > 0) {
     capex += SOLAR_PV_COST_PER_KW[state] * solarKw;
-    if (years >= INVERTER_REPLACEMENT_YEAR) capex += INVERTER_REPLACEMENT_COST;
   }
   if (batteryKwh > 0) {
-    capex += BATTERY_COST_PER_KWH * batteryKwh + BATTERY_INSTALLATION_COST;
+    // Installation labour is only charged for standalone battery retrofits.
+    // When PV is being installed at the same time the crew is already on
+    // site, so the marginal install cost is 0. Mirrors R model.
+    const installation = solarKw > 0 ? 0 : BATTERY_INSTALLATION_COST;
+    capex += BATTERY_COST_PER_KWH * batteryKwh + installation;
+  }
+  // Inverter — one unit installed with the system, plus a mid-life
+  // replacement at year 12 (only if the horizon reaches it). Charged
+  // whenever the household has solar OR a battery, mirroring R
+  // has_solar_or_battery in evaluate_solar_battery.
+  if (solarKw > 0 || batteryKwh > 0) {
+    const inverterUnits = years >= INVERTER_REPLACEMENT_YEAR ? 2 : 1;
+    capex += inverterUnits * INVERTER_REPLACEMENT_COST;
   }
   return capex;
 }
@@ -1172,10 +1261,11 @@ export interface WholeHomeBatteryDiagnostics {
 }
 
 export function wholeHomeBatteryDiagnostics(inputs: HouseInputs): WholeHomeBatteryDiagnostics {
+  const { solarKw: presetSolarKw, batteryKwh: presetBatteryKwh } = wholeHomePreset(inputs.dwelling);
   const empty: WholeHomeBatteryDiagnostics = {
     active: false,
-    solarKw: WHOLE_HOME_SOLAR_KW,
-    batteryKwh: WHOLE_HOME_BATTERY_KWH,
+    solarKw: presetSolarKw,
+    batteryKwh: presetBatteryKwh,
     solarGenerationKwhPerYear: 0,
     solarSelfConsumedKwhPerYear: 0,
     batteryChargeKwhPerYear: 0,
@@ -1191,19 +1281,19 @@ export function wholeHomeBatteryDiagnostics(inputs: HouseInputs): WholeHomeBatte
   if (inputs.solarScenario === "grid_only") return empty;
 
   const years = inputs.period === "1year" ? 1 : 15;
-  const flows = annualBatteryFlows(inputs, WHOLE_HOME_SOLAR_KW, WHOLE_HOME_BATTERY_KWH, years);
+  const flows = annualBatteryFlows(inputs, presetSolarKw, presetBatteryKwh, years);
   const fit = FIT_BY_STATE[inputs.state] ?? 0;
-  const wholesaleAnnual = tieredHeadroomAnnualValue(inputs.state, flows, WHOLE_HOME_SOLAR_KW);
+  const wholesaleAnnual = tieredHeadroomAnnualValue(inputs.state, flows, presetSolarKw);
   const blendedWholesale = flows.headroomKwh > 0 ? wholesaleAnnual / flows.headroomKwh : 0;
   // Discharge = AC-out total (load-serving + headroom). Charge = DC-in draw
   // = discharge / round-trip efficiency; the gap is the round-trip loss.
   const dischargeKwh = flows.batteryStoredKwh;
   const chargeKwh = dischargeKwh / BATTERY_ROUND_TRIP_EFFICIENCY;
-  const generationKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * WHOLE_HOME_SOLAR_KW * 365;
+  const generationKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * presetSolarKw * 365;
   return {
     active: true,
-    solarKw: WHOLE_HOME_SOLAR_KW,
-    batteryKwh: WHOLE_HOME_BATTERY_KWH,
+    solarKw: presetSolarKw,
+    batteryKwh: presetBatteryKwh,
     solarGenerationKwhPerYear: generationKwh,
     solarSelfConsumedKwhPerYear: flows.solarSelfConsumedKwh,
     batteryChargeKwhPerYear: chargeKwh,
