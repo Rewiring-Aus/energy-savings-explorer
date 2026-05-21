@@ -571,7 +571,12 @@ export const BYD_MODEL_BY_CLASS: Record<VehicleClass, string> = {
 export function variantLabel(variant: VehicleVariant, vClass: VehicleClass): string {
   if (variant === "new")  return "Average new";
   if (variant === "used") return "Average used";
-  return BYD_MODEL_BY_CLASS[vClass];
+  // BYD model branch — show just "BYD" in the inline selector to keep the
+  // sentence compact. The underlying VehicleOption ("byd_dolphin" / "_seal"
+  // / "_sealion") still drives the right capex + Wh/km lookup; vClass
+  // remains the source of truth for which model is selected.
+  void vClass;
+  return "BYD";
 }
 
 export function toVehicleOption(vClass: VehicleClassChoice, variant: VehicleVariant): VehicleOption {

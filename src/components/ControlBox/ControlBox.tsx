@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Box, MenuItem, Select, Typography, useTheme } from "@mui/material";
+import rough from "roughjs";
 import {
   DwellingType,
   EvTariff,
@@ -44,20 +45,23 @@ const VEHICLE_INTS = [0, 1, 2, 3];
 const HANDWRITTEN_COLOR = "#c2410c";  // warm rust orange
 const HANDWRITTEN_FONT = '"Caveat", "Patrick Hand", "Comic Sans MS", cursive';
 
+// Select sx — drops the CSS border / background / radius; the visible "pill"
+// is drawn as a rough.js sketched rectangle behind the Select (see
+// InlineSelect below). Keeps the cursive font + orange ink + chevron colour.
 const inlineSelectSx = {
   fontFamily: HANDWRITTEN_FONT,
   fontSize: "1.45rem",
   lineHeight: 1,
   color: HANDWRITTEN_COLOR,
   fontWeight: 700,
-  backgroundColor: "#fffaf3",
-  border: `2px solid ${HANDWRITTEN_COLOR}`,
-  borderRadius: "8px",
-  margin: "0 0.15rem",
+  backgroundColor: "transparent",
   padding: 0,
+  position: "relative",
+  zIndex: 1,
   "& .MuiSelect-select": {
     padding: "0.05rem 1.6rem 0.05rem 0.55rem !important",
     minHeight: "0 !important",
+    backgroundColor: "transparent",
   },
   "& .MuiOutlinedInput-notchedOutline": { border: "none" },
   "& .MuiSvgIcon-root": { color: HANDWRITTEN_COLOR, right: 2 },
@@ -70,34 +74,102 @@ interface InlineSelectProps<T extends string | number> {
   width?: number | string;
 }
 
+// Hand-drawn pill via rough.js: a sketched rounded rectangle sits behind a
+// transparent MUI Select. The SVG resizes to whatever the Select actually
+// measures (different labels are different widths). One stable seed per
+// mount so the sketch doesn't redraw differently every keystroke; only the
+// dimensions change when the picked option changes.
 function InlineSelect<T extends string | number>({
   value, options, onChange, width,
 }: InlineSelectProps<T>) {
+  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  // Stable per-mount seed so the sketch is the same shape across renders.
+  const seedRef = useRef<number>(Math.floor(Math.random() * 1e9));
+
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        setDims({
+          w: Math.ceil(e.contentRect.width),
+          h: Math.ceil(e.contentRect.height),
+        });
+      }
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || dims.w <= 0 || dims.h <= 0) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const rc = rough.svg(svg);
+    // Inset by 3 px on each side so the rough strokes don't get clipped at
+    // the SVG edges (roughness can push lines a few px outside the nominal
+    // rectangle).
+    const inset = 3;
+    const rect = rc.rectangle(inset, inset, dims.w - inset * 2, dims.h - inset * 2, {
+      stroke: HANDWRITTEN_COLOR,
+      strokeWidth: 1.6,
+      fill: "#fffaf3",
+      fillStyle: "solid",
+      roughness: 1.4,
+      bowing: 1.2,
+      seed: seedRef.current,
+    });
+    svg.appendChild(rect);
+  }, [dims]);
+
   return (
-    <Select
-      value={value}
-      variant="outlined"
-      size="small"
-      onChange={(e) => onChange(e.target.value as T)}
-      sx={{ ...inlineSelectSx, width: width ?? "auto" }}
-      MenuProps={{
-        PaperProps: {
-          sx: {
-            "& .MuiMenuItem-root": {
-              fontFamily: HANDWRITTEN_FONT,
-              fontSize: "1.2rem",
-              color: HANDWRITTEN_COLOR,
-            },
-          },
-        },
+    <Box
+      component="span"
+      ref={wrapRef}
+      sx={{
+        position: "relative",
+        display: "inline-block",
+        margin: "0 0.15rem",
+        verticalAlign: "middle",
       }}
     >
-      {options.map((opt) => (
-        <MenuItem key={String(opt.value)} value={opt.value}>
-          {opt.label}
-        </MenuItem>
-      ))}
-    </Select>
+      <svg
+        ref={svgRef}
+        width={dims.w}
+        height={dims.h}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          pointerEvents: "none",
+        }}
+      />
+      <Select
+        value={value}
+        variant="outlined"
+        size="small"
+        onChange={(e) => onChange(e.target.value as T)}
+        sx={{ ...inlineSelectSx, width: width ?? "auto" }}
+        MenuProps={{
+          PaperProps: {
+            sx: {
+              "& .MuiMenuItem-root": {
+                fontFamily: HANDWRITTEN_FONT,
+                fontSize: "1.2rem",
+                color: HANDWRITTEN_COLOR,
+              },
+            },
+          },
+        }}
+      >
+        {options.map((opt) => (
+          <MenuItem key={String(opt.value)} value={opt.value}>
+            {opt.label}
+          </MenuItem>
+        ))}
+      </Select>
+    </Box>
   );
 }
 
@@ -259,10 +331,15 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
           options={vehicleCountOptions}
           onChange={(v: number) => setVehicleCount(v)}
         />{" "}
-        {carPhrase}
+        {carPhrase}.
         {hasCar && (
           <>
-            ,{" "}
+            {" "}
+            Our electric car would be{" "}
+            {/* "an average new …" vs "a BYD …" — "byd" starts with a
+                consonant sound, the two average variants start with a
+                vowel. */}
+            {vVariant === "byd" ? "a" : "an"}{" "}
             <InlineSelect
               value={vVariant}
               options={variantOptions}
@@ -273,11 +350,7 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
               options={classOptions}
               onChange={(v: VehicleClassChoice) => setClass(v)}
             />
-          </>
-        )}
-        .{" "}
-        {hasCar && (
-          <>
+            .{" "}
             I usually drive{" "}
             <InlineSelect
               value={value.drivingLevel}

@@ -129,8 +129,8 @@ export interface HouseInputs {
 
 export const DEFAULT_INPUTS: HouseInputs = {
   state: "AUS",
-  occupants: 2.7,         // Australian Census average
-  vehicles: 1.8,          // ABS vehicles-per-household average
+  occupants: 3,           // round preset; the dropdown still offers 2.7 (avg)
+  vehicles: 2,            // round preset; the dropdown still offers 1.8 (avg)
   vehicleOption: "byd_dolphin",
   drivingLevel: "middle", // state-average km/day (R model default)
   dwelling: "house",

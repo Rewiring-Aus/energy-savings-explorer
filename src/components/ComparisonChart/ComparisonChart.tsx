@@ -85,20 +85,34 @@ interface HoverState {
   y: number;
 }
 
-// Renders a stacked bar as a single SVG using rough.js for the hand-drawn
-// hachured fills. The SVG is sized to the chart area (maxPx tall) and the
-// bars grow up from the bottom; segment labels are drawn as SVG <text>.
-// Each segment also gets a transparent hit-area rect that surfaces a hover
-// tooltip — important for thin segments where the inline label is suppressed.
-const RoughStackedBar: React.FC<{
+interface SavingsAbove {
+  amount: number;    // absolute value, always positive
+  positive: boolean; // true = "Savings from electrifying", false = "Cost of electrifying"
+  years: number;
+}
+
+// Renders a complete chart column (savings-or-cost callout on top + stacked
+// cost segments below) in a SINGLE SVG using rough.js. Everything inside the
+// chart card is hand-drawn — savings rect, bar segments, even the heading
+// inside the callout — so the look is unified and the column width is one
+// source of truth (the SVG width), guaranteeing the callout matches the bar.
+//
+// Vertical layout, top → bottom:
+//   y = 0           savingsPx tall savings/cost rect (skipped if 0)
+//   y = savingsPx   bar segments stack upward from y = maxPx
+const RoughBarColumn: React.FC<{
   segments: RoughSegment[];
   totalPx: number;
   maxPx: number;
-}> = ({ segments, totalPx, maxPx }) => {
+  savingsAbove?: SavingsAbove;
+}> = ({ segments, totalPx, maxPx, savingsAbove }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<HoverState | null>(null);
+
+  const savingsPx =
+    savingsAbove && savingsAbove.amount > 0 ? Math.max(maxPx - totalPx, 0) : 0;
 
   useEffect(() => {
     if (!wrapRef.current) return;
@@ -116,6 +130,76 @@ const RoughStackedBar: React.FC<{
     const rc = rough.svg(svg);
     const ns = "http://www.w3.org/2000/svg";
 
+    // ---- Savings/cost callout rectangle (top of SVG) ----------------------
+    if (savingsAbove && savingsPx > 0) {
+      const { amount, positive, years } = savingsAbove;
+      const bgFill = positive ? "#e8f5e9" : "#fdecea";
+      const strokeColor = positive ? "#2e7d32" : "#c62828";
+      const fgColor = positive ? "#1b5e20" : "#b71c1c";
+      // Inset the rect by 2 px so the rough stroke isn't clipped at the SVG
+      // edges. The bottom edge butts directly against the top of the bar
+      // segments — no negative margin trickery needed.
+      const inset = 2;
+      const rect = rc.rectangle(inset, inset, width - inset * 2, savingsPx - inset, {
+        fill: bgFill,
+        fillStyle: "solid",
+        stroke: strokeColor,
+        strokeWidth: 1.8,
+        roughness: 1.4,
+        bowing: 1.0,
+        seed: positive ? 13 : 19,
+      });
+      svg.appendChild(rect);
+
+      // Text inside the rect — tiered by height so short boxes still read.
+      // Headings are kept short (single word) so they fit the bar's column
+      // width (~120-180 px). The full "Savings from electrifying" phrasing
+      // wouldn't fit at 10 px font and was getting clipped on the right.
+      const showHeading = savingsPx >= 56;
+      const showSubheading = savingsPx >= 110 && years > 1;
+      const showAnnual = savingsPx >= 90 && years > 1;
+      const amountSize = savingsPx >= 110 ? 26 : savingsPx >= 70 ? 22 : 18;
+      const headingText = positive ? "SAVINGS" : "EXTRA COST";
+      const subheadingText = years > 1 ? `over ${years} yrs` : "";
+
+      // Vertical positions: distribute heading / sub / amount / per-year
+      // across the available rect height. y values stay below savingsPx so
+      // the per-year line never crosses into the bar segments underneath.
+      const cx = width / 2;
+      const lines: { text: string; y: number; size: number; bold?: boolean }[] = [];
+      if (showHeading && showSubheading) {
+        lines.push({ text: headingText, y: savingsPx * 0.18, size: 11, bold: true });
+        lines.push({ text: subheadingText, y: savingsPx * 0.36, size: 9 });
+        lines.push({ text: formatMoney(amount), y: savingsPx * 0.60, size: amountSize, bold: true });
+        if (showAnnual) {
+          lines.push({ text: `${formatMoney(amount / years)} / yr avg`, y: savingsPx * 0.86, size: 10 });
+        }
+      } else if (showHeading && showAnnual) {
+        lines.push({ text: headingText, y: savingsPx * 0.22, size: 11, bold: true });
+        lines.push({ text: formatMoney(amount), y: savingsPx * 0.55, size: amountSize, bold: true });
+        lines.push({ text: `${formatMoney(amount / years)} / yr avg`, y: savingsPx * 0.85, size: 10 });
+      } else if (showHeading) {
+        lines.push({ text: headingText, y: savingsPx * 0.28, size: 11, bold: true });
+        lines.push({ text: formatMoney(amount), y: savingsPx * 0.68, size: amountSize, bold: true });
+      } else {
+        lines.push({ text: formatMoney(amount), y: savingsPx / 2, size: amountSize, bold: true });
+      }
+      for (const line of lines) {
+        const t = document.createElementNS(ns, "text");
+        t.setAttribute("x", String(cx));
+        t.setAttribute("y", String(line.y));
+        t.setAttribute("text-anchor", "middle");
+        t.setAttribute("dominant-baseline", "middle");
+        t.setAttribute("font-size", String(line.size));
+        t.setAttribute("font-weight", line.bold ? "700" : "500");
+        t.setAttribute("fill", fgColor);
+        t.style.pointerEvents = "none";
+        t.textContent = line.text;
+        svg.appendChild(t);
+      }
+    }
+
+    // ---- Bar segments (bottom of SVG, growing upward) ----------------------
     let y = maxPx;
     for (const seg of segments) {
       y -= seg.segPx;
@@ -175,7 +259,7 @@ const RoughStackedBar: React.FC<{
       hit.addEventListener("mouseleave", () => setHover(null));
       svg.appendChild(hit);
     }
-  }, [segments, totalPx, maxPx, width]);
+  }, [segments, totalPx, maxPx, width, savingsAbove, savingsPx]);
 
   return (
     <Box
@@ -213,7 +297,8 @@ const Bar: React.FC<{
   cost: HouseCost;
   maxTotal: number;
   maxPx: number;
-}> = ({ label, cost, maxTotal, maxPx }) => {
+  savingsAbove?: SavingsAbove;
+}> = ({ label, cost, maxTotal, maxPx, savingsAbove }) => {
   const totalPx = maxTotal > 0 ? (cost.total / maxTotal) * maxPx : 0;
   const segments: RoughSegment[] = ORDER
     .map((key) => ({ key, value: cost[key as keyof HouseCost] as number }))
@@ -237,7 +322,12 @@ const Bar: React.FC<{
       <Typography variant="h4" sx={{ m: 0, textAlign: "center" }}>
         {formatMoney(cost.total)}
       </Typography>
-      <RoughStackedBar segments={segments} totalPx={totalPx} maxPx={maxPx} />
+      <RoughBarColumn
+        segments={segments}
+        totalPx={totalPx}
+        maxPx={maxPx}
+        savingsAbove={savingsAbove}
+      />
     </Box>
   );
 };
@@ -260,52 +350,6 @@ const Legend: React.FC = () => (
   </Box>
 );
 
-const SavingsBox: React.FC<{ savings: number; years: number }> = ({ savings, years }) => {
-  const positive = savings > 0;
-  const fg = positive ? "#1b5e20" : "#b71c1c";
-  const heading = positive ? "Savings from electrifying" : "Cost of electrifying";
-  return (
-    <Box
-      sx={{
-        flex: "0 0 auto",
-        minWidth: 180,
-        maxWidth: 240,
-        alignSelf: "stretch",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        alignItems: "center",
-        padding: "1rem",
-        backgroundColor: positive ? "#e8f5e9" : "#fdecea",
-        border: `2px solid ${positive ? "#2e7d32" : "#c62828"}`,
-        borderRadius: 2,
-        textAlign: "center",
-      }}
-    >
-      <Typography variant="overline" sx={{ m: 0, lineHeight: 1.2, color: fg }}>
-        {heading} {years > 1 ? `over ${years} years` : ""}
-      </Typography>
-      <Typography
-        sx={{
-          m: 0,
-          mt: 1,
-          fontSize: { xs: "1.8rem", sm: "2.4rem" },
-          fontWeight: 700,
-          color: fg,
-          lineHeight: 1.1,
-        }}
-      >
-        {formatMoney(Math.abs(savings))}
-      </Typography>
-      {years > 1 && (
-        <Typography sx={{ mt: 0.75, fontSize: "0.85rem", color: fg, lineHeight: 1.2 }}>
-          {formatMoney(Math.abs(savings) / years)} / year average
-        </Typography>
-      )}
-    </Box>
-  );
-};
-
 const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox, years = 1 }) => {
   const theme = useTheme();
   // Y-axis is the actual peak across columns — the tallest bar fills the
@@ -315,10 +359,20 @@ const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox,
 
   const showSavings = showSavingsBox === true && bars.length === 2;
   // Savings = difference of *displayed* (rounded) totals, so the figure
-  // matches what the user sees on the bars.
+  // matches what the user sees on the bars. Positive savings = electric
+  // cheaper (typical); negative = electric costs more.
   const savings = showSavings
     ? roundForDisplay(bars[0].cost.total) - roundForDisplay(bars[1].cost.total)
     : 0;
+  // The stacked savings/cost box sits on top of the SHORTER bar — savings
+  // overlaps the electric column when it's cheaper, cost overlaps the gas
+  // column when electric is dearer. Whichever bar is shorter gets the box.
+  const shorterIdx =
+    showSavings && bars[1].cost.total < bars[0].cost.total ? 1 : 0;
+  const savingsForBar = (i: number) =>
+    showSavings && savings !== 0 && i === shorterIdx
+      ? { amount: Math.abs(savings), positive: savings > 0, years }
+      : undefined;
 
   return (
     <Box
@@ -337,30 +391,20 @@ const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox,
           display: "flex",
           gap: { xs: 1, sm: 2 },
           justifyContent: "center",
-          alignItems: "stretch",
+          alignItems: "flex-end",
           mt: 2,
         }}
       >
-        <Box
-          sx={{
-            flex: 1,
-            display: "flex",
-            gap: { xs: 1, sm: 2 },
-            justifyContent: "center",
-            alignItems: "flex-end",
-          }}
-        >
-          {bars.map((b, i) => (
-            <Bar
-              key={`${b.label}-${i}`}
-              label={b.label}
-              cost={b.cost}
-              maxTotal={maxTotal}
-              maxPx={chartHeight}
-            />
-          ))}
-        </Box>
-        {showSavings && <SavingsBox savings={savings} years={years} />}
+        {bars.map((b, i) => (
+          <Bar
+            key={`${b.label}-${i}`}
+            label={b.label}
+            cost={b.cost}
+            maxTotal={maxTotal}
+            maxPx={chartHeight}
+            savingsAbove={savingsForBar(i)}
+          />
+        ))}
       </Box>
       <Legend />
       {footer && (
