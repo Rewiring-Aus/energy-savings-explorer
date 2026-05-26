@@ -2,6 +2,8 @@
 // Source CSVs live at:
 //   Research/Data/Clean data - for internal use/Energy savings report data/Model input data
 
+import { solarCapacityFactorForPostcode } from "./solar_postcode_data";
+
 export const STATES = [
   "AUS",
   "NSW",
@@ -26,6 +28,27 @@ export const STATE_LABELS: Record<StateCode, string> = {
   ACT: "ACT",
   NT: "NT",
 };
+
+// Resolve an Australian 4-digit postcode to the corresponding state.
+// Ranges from Australia Post's published allocation; ACT carves out of NSW's
+// 2xxx range. Returns null for postcodes that don't fall in any state range
+// (e.g. PO-only ranges, overseas territories). The visualiser keeps `state`
+// as the canonical model input and uses this to coerce a user-typed
+// postcode into the right state.
+export function postcodeToState(postcode: number): StateCode | null {
+  if (postcode >= 200 && postcode <= 299) return "ACT";
+  if (postcode >= 2600 && postcode <= 2618) return "ACT";
+  if (postcode >= 2900 && postcode <= 2920) return "ACT";
+  if ((postcode >= 1000 && postcode <= 2599) || (postcode >= 2619 && postcode <= 2899) ||
+      (postcode >= 2921 && postcode <= 2999)) return "NSW";
+  if (postcode >= 800 && postcode <= 999) return "NT";
+  if (postcode >= 3000 && postcode <= 3999) return "VIC";
+  if (postcode >= 4000 && postcode <= 4999) return "QLD";
+  if (postcode >= 5000 && postcode <= 5799) return "SA";
+  if (postcode >= 6000 && postcode <= 6797) return "WA";
+  if (postcode >= 7000 && postcode <= 7999) return "TAS";
+  return null;
+}
 
 export type Fuel =
   | "electricity"
@@ -376,6 +399,19 @@ export const SOLAR_DAILY_KWH_PER_KW: Record<StateCode, number> = {
   SA:  4.3782, TAS: 3.4516, VIC: 3.7567, WA:  4.9536,
 };
 
+// Look up the daily solar generation per kW of PV. Falls through tiers:
+//   1. Postcode (if known + present in the per-postcode CSV)        — most local
+//   2. State                                                         — fallback
+// The postcode table holds capacity factors; we multiply by 24 h to match
+// the units of SOLAR_DAILY_KWH_PER_KW.
+export function getSolarDailyKwhPerKw(state: StateCode, postcode: number | undefined): number {
+  if (postcode !== undefined) {
+    const cf = solarCapacityFactorForPostcode(postcode);
+    if (cf !== undefined) return cf * 24;
+  }
+  return SOLAR_DAILY_KWH_PER_KW[state];
+}
+
 // One-off battery installation cost (per Tipping point CSV, row "Battery installation").
 export const BATTERY_INSTALLATION_COST = 2300;
 
@@ -568,13 +604,12 @@ export const BYD_MODEL_BY_CLASS: Record<VehicleClass, string> = {
   suv: "BYD Sealion",
 };
 
+// "new" and "used" render lower-case in the inline sentence; the BYD branch
+// stays upper-case (it's a brand name). ControlBox treats the variant label
+// as already correctly cased — callers shouldn't .toLowerCase() it.
 export function variantLabel(variant: VehicleVariant, vClass: VehicleClass): string {
-  if (variant === "new")  return "Average new";
-  if (variant === "used") return "Average used";
-  // BYD model branch — show just "BYD" in the inline selector to keep the
-  // sentence compact. The underlying VehicleOption ("byd_dolphin" / "_seal"
-  // / "_sealion") still drives the right capex + Wh/km lookup; vClass
-  // remains the source of truth for which model is selected.
+  if (variant === "new")  return "average new";
+  if (variant === "used") return "average used";
   void vClass;
   return "BYD";
 }
@@ -630,3 +665,56 @@ export const COOLING_ONLY_CAPEX = 2000;
 // cumulative load of heat pump heating + heat pump HW + induction + EV
 // charging. Mirrors R model switchboard_upgrade_capex.
 export const SWITCHBOARD_UPGRADE_CAPEX = 2500;
+
+// ---------------------------------------------------------------------------
+// Appliance_subsidies.csv — state-level rebates that reduce capex on heat
+// pumps, solar PV, and home batteries. Mirrors the R model's
+// get_appliance_subsidy() lookup. "Apartment" rows fire only when
+// dwelling === "apartment"; "VPP" rows fire only when the household opts in
+// to a VPP (modelled here as batteryValue === "vpp"). The WA Synergy /
+// Horizon split and the QLD Landlord row are not exposed in the UI — those
+// require a postcode / landlord toggle the visualiser doesn't expose.
+// ---------------------------------------------------------------------------
+
+export interface SubsidyResult {
+  // Heat pump rebate ($) applied to each heat pump appliance installed
+  // (space heating, water heating). Mirrors R "Heat pump" rows.
+  heatPumpPerAppliance: number;
+  // Solar PV rebate ($) applied once to the household's PV install.
+  solarPv: number;
+  // Battery rebate ($/kWh) applied per kWh of battery capacity. The
+  // visualiser fires this only when batteryValue === "vpp".
+  batteryPerKwh: number;
+}
+
+export function getApplianceSubsidies(
+  state: StateCode,
+  dwelling: "house" | "apartment",
+  batteryVpp: boolean,
+): SubsidyResult {
+  let heatPump = 0;
+  let solarPv = 0;
+  let batteryPerKwh = 0;
+
+  if (state === "VIC") {
+    heatPump = 1000;                              // VIC Energy Upgrades — heat pump
+    solarPv = dwelling === "apartment" ? 2400 : 1400; // VIC Solar Homes (apartment gets the higher tier)
+  } else if (state === "NSW") {
+    if (dwelling === "apartment") solarPv = 2400; // NSW apartment-only solar rebate
+    if (batteryVpp) batteryPerKwh = 50;           // NSW peak-demand battery rebate (VPP)
+  }
+
+  return { heatPumpPerAppliance: heatPump, solarPv, batteryPerKwh };
+}
+
+// ---------------------------------------------------------------------------
+// Vehicle_maintenance.csv — annual service + tyres + consumables ($/yr per
+// vehicle), excludes registration / insurance / fuel. Mirrors R
+// get_vehicle_maintenance().
+// ---------------------------------------------------------------------------
+
+export const VEHICLE_MAINTENANCE_ANNUAL: Record<VehicleClass, { electric: number; ice: number }> = {
+  suv:       { electric: 800, ice: 790 },
+  sedan:     { electric: 640, ice: 790 },
+  hatchback: { electric: 510, ice: 750 },
+};

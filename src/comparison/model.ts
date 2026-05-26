@@ -29,19 +29,21 @@ import {
   SEASONAL_PEAK_PRICES,
   SEASONS,
   SEASONAL_SOLAR_WEIGHTS,
-  SOLAR_DAILY_KWH_PER_KW,
   SOLAR_LCOE_BY_STATE,
   SOLAR_PV_COST_PER_KW,
+  getSolarDailyKwhPerKw,
   SolarSizeKw,
   STATES,
   StateCode,
   SWITCHBOARD_UPGRADE_CAPEX,
   VEHICLE_CAPEX_NEW,
   VEHICLE_EFFICIENCY_WH_KM,
+  VEHICLE_MAINTENANCE_ANNUAL,
   VehicleClass,
   VehicleOption,
   VEHICLE_OPTION_DATA,
   VPP_ANNUAL_BENEFIT,
+  getApplianceSubsidies,
   getScalingFactor,
 } from "./data";
 
@@ -113,9 +115,17 @@ export type EvTariff = "ev" | "off_peak";
 
 export interface HouseInputs {
   state: StateCode;
+  // Optional 4-digit Australian postcode. When set, postcode-level inputs
+  // (solar capacity factor by postcode) override the state default; other
+  // model inputs still resolve at the state level. Cleared when the user
+  // picks a state directly from the dropdown.
+  postcode?: number;
   occupants: number;
   vehicles: number;
-  vehicleOption: VehicleOption;
+  // Per-car configuration. Length equals the (integer) vehicles count; for
+  // the fractional "average" presets (e.g. 1.8) the array carries a single
+  // entry that's applied with the fractional weight. Empty array → no cars.
+  vehicleOptions: VehicleOption[];
   drivingLevel: DrivingLevel;
   dwelling: DwellingType;
   finance: boolean;
@@ -131,7 +141,7 @@ export const DEFAULT_INPUTS: HouseInputs = {
   state: "AUS",
   occupants: 3,           // round preset; the dropdown still offers 2.7 (avg)
   vehicles: 2,            // round preset; the dropdown still offers 1.8 (avg)
-  vehicleOption: "byd_dolphin",
+  vehicleOptions: ["byd_dolphin", "suv_new"],
   drivingLevel: "middle", // state-average km/day (R model default)
   dwelling: "house",
   finance: true,
@@ -250,26 +260,48 @@ function computeCapitalAndInterest(
 }
 
 // Resolve the vehicle class used for energy/efficiency lookups. Falls back to
-// SUV for the "no_car" case (it's never read since vehicleCount becomes 0).
+// SUV for the "no_car" case (callers shouldn't be passing it).
 function vehicleClassFromOption(option: VehicleOption): VehicleClass {
   return VEHICLE_OPTION_DATA[option].class ?? "suv";
 }
 
-// Number of vehicles to count toward energy + capex. "no_car" overrides the
-// numeric vehicles input — picking "No car" zeroes vehicles regardless of
-// what the count toggle says.
-function effectiveVehicleCount(inputs: HouseInputs): number {
-  return inputs.vehicleOption === "no_car" ? 0 : inputs.vehicles;
+// Normalise the per-car configuration to a list of {option, class, weight}.
+// Integer vehicle counts produce one entry per car with weight 1; the
+// fractional "average" preset (e.g. 1.8) produces a single entry whose
+// weight is the fractional count (energy + capex scale linearly).
+export interface VehicleEntry {
+  option: VehicleOption;
+  vClass: VehicleClass;
+  weight: number;
 }
 
+export function vehicleEntries(inputs: HouseInputs): VehicleEntry[] {
+  const count = inputs.vehicles;
+  if (count <= 0) return [];
+  const opts = (inputs.vehicleOptions ?? []).filter((o) => o !== "no_car");
+  if (opts.length === 0) return [];
+
+  if (!Number.isInteger(count)) {
+    const opt = opts[0];
+    return [{ option: opt, vClass: vehicleClassFromOption(opt), weight: count }];
+  }
+
+  const result: VehicleEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    const opt = opts[i] ?? opts[opts.length - 1];
+    result.push({ option: opt, vClass: vehicleClassFromOption(opt), weight: 1 });
+  }
+  return result;
+}
+
+
 export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
-  const { state, occupants, dwelling, period, vehicleOption, drivingLevel } = inputs;
+  const { state, occupants, dwelling, period, drivingLevel } = inputs;
   const occScale = getScalingFactor(occupants);
   const dwScale = dwelling === "apartment" ? APARTMENT_ENERGY_FACTOR : 1;
   const years = period === "1year" ? 1 : 15;
   const days = 365 * years;
-  const vehicleCount = effectiveVehicleCount(inputs);
-  const vClass = vehicleClassFromOption(vehicleOption);
+  const entries = vehicleEntries(inputs);
   const km = kmPerDay(state, drivingLevel);
 
   // NT falls back to LPG (no reticulated gas). Everywhere else uses natural gas.
@@ -292,10 +324,15 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   const coolingKwh = energy("Space Cooling", "Heat pump", state) * occScale * dwScale;
   const elecDemand = otherKwh + coolingKwh;
 
-  // Vehicles — ICE (uses petrol price)
-  const iceKwhDay = vehicleCount > 0
-    ? (VEHICLE_EFFICIENCY_WH_KM[vClass].ice * km) / 1000 * vehicleCount
-    : 0;
+  // Vehicles — ICE (uses petrol price). Per-car efficiency × km/day × weight.
+  const iceKwhDay = entries.reduce(
+    (sum, e) => sum + (VEHICLE_EFFICIENCY_WH_KM[e.vClass].ice * km) / 1000 * e.weight,
+    0,
+  );
+  const iceMaintenancePerYear = entries.reduce(
+    (sum, e) => sum + VEHICLE_MAINTENANCE_ANNUAL[e.vClass].ice * e.weight,
+    0,
+  );
 
   const fossilPrice = priceFor(state, fossil, period);
   const elecPrice   = priceFor(state, "electricity", period);
@@ -306,9 +343,13 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   const petrolVolumeCost = iceKwhDay * 365 * petrolPrice.kwh * years;
   const elecVolumeCost   = elecDemand * 365 * elecPrice.kwh * years;
   const elecSupplyCost   = elecPrice.daily * days;
+  const iceMaintenanceCost = iceMaintenancePerYear * years;
 
   const gas         = gasVolumeCost + gasSupplyCost;
-  const petrol      = petrolVolumeCost;
+  // Vehicle maintenance rolls into the "petrol" segment (fuel + service +
+  // tyres + consumables are all vehicle-running costs from the chart's
+  // perspective).
+  const petrol      = petrolVolumeCost + iceMaintenanceCost;
   const electricity = elecVolumeCost + elecSupplyCost;
 
   // Fossil-heated households still need cooling — add a standalone split-AC
@@ -316,9 +357,10 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   // cooling_only_capex in evaluate_household. The cooling kWh is already in
   // elecDemand above.
   const applianceCapex = fossilCapexHeating + fossilCapexWater + fossilCapexCooktop + COOLING_ONLY_CAPEX;
-  const vehicleCapex   = vehicleCount > 0
-    ? VEHICLE_OPTION_DATA[vehicleOption].iceCapex * vehicleCount
-    : 0;
+  const vehicleCapex   = entries.reduce(
+    (sum, e) => sum + VEHICLE_OPTION_DATA[e.option].iceCapex * e.weight,
+    0,
+  );
   const totalCapex     = applianceCapex + vehicleCapex;
 
   // 1-year view is operating-cost only at current prices (no capex, no finance).
@@ -337,13 +379,12 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
 }
 
 export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
-  const { state, occupants, dwelling, period, solarScenario, vehicleOption, drivingLevel } = inputs;
+  const { state, occupants, dwelling, period, solarScenario, drivingLevel } = inputs;
   const occScale = getScalingFactor(occupants);
   const dwScale = dwelling === "apartment" ? APARTMENT_ENERGY_FACTOR : 1;
   const years = period === "1year" ? 1 : 15;
   const days = 365 * years;
-  const vehicleCount = effectiveVehicleCount(inputs);
-  const vClass = vehicleClassFromOption(vehicleOption);
+  const entries = vehicleEntries(inputs);
   const km = kmPerDay(state, drivingLevel);
   const { solarKw: presetSolarKw, batteryKwh: presetBatteryKwh } = wholeHomePreset(dwelling);
 
@@ -356,9 +397,16 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
   // EV charging — split into home-charged (eligible for solar, priced at the
   // off-peak retail rate) and public DC fast-charged (no solar, no supply
   // charge, priced at the fast-charge rate). Mirrors R FAST_CHARGE_FRACTION.
-  const evTotalKwhDay = vehicleCount > 0
-    ? (VEHICLE_EFFICIENCY_WH_KM[vClass].electric * km) / 1000 * vehicleCount
-    : 0;
+  // Per-car efficiencies are summed so mixed fleets (e.g. BYD Dolphin + SUV)
+  // compute the right total kWh/day.
+  const evTotalKwhDay = entries.reduce(
+    (sum, e) => sum + (VEHICLE_EFFICIENCY_WH_KM[e.vClass].electric * km) / 1000 * e.weight,
+    0,
+  );
+  const evMaintenancePerYear = entries.reduce(
+    (sum, e) => sum + VEHICLE_MAINTENANCE_ANNUAL[e.vClass].electric * e.weight,
+    0,
+  );
   const evFastKwhDay  = evTotalKwhDay * FAST_CHARGE_FRACTION;
   const evHomeKwhDay  = evTotalKwhDay - evFastKwhDay;
 
@@ -382,7 +430,7 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
     cooktopKwh   * frac.cooktop +
     otherKwh     * frac.other +
     evHomeKwhDay * frac.vehicles;
-  const pvDailyKwh = SOLAR_DAILY_KWH_PER_KW[state] * presetSolarKw;
+  const pvDailyKwh = getSolarDailyKwhPerKw(state, inputs.postcode) * presetSolarKw;
   const solarScale = solarScenario === "grid_only" || solarDemandKwhDay === 0
     ? 1
     : solarDemandKwhDay > pvDailyKwh
@@ -438,25 +486,45 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
     batteryCapex = BATTERY_COST_PER_KWH * presetBatteryKwh;
   }
 
-  const applianceCapex = APPLIANCE_CAPEX.spaceHeatingHeatPump +
-                         APPLIANCE_CAPEX.waterHeatingHeatPump +
-                         APPLIANCE_CAPEX.cooktopInduction +
-                         SWITCHBOARD_UPGRADE_CAPEX;
-  const vehicleCapex   = vehicleCount > 0
-    ? VEHICLE_OPTION_DATA[vehicleOption].evCapex * vehicleCount
-    : 0;
-  const pvCapex        = solarSystemCapex(state, presetSolarKw, solarScenario, years);
-  const totalCapex     = applianceCapex + vehicleCapex + pvCapex + batteryCapex;
+  // State appliance subsidies (Appliance_subsidies.csv). Heat pump rebate
+  // fires for both heat pump appliances (space heating + water heating).
+  // Solar PV rebate is a flat $ off the install; battery rebate is $/kWh ×
+  // battery size and only fires under VPP enrolment (visualiser maps to
+  // batteryValue === "vpp"). Capex floors at 0.
+  const subsidies = getApplianceSubsidies(state, dwelling, inputs.batteryValue === "vpp");
+  const heatPumpSubsidyTotal = subsidies.heatPumpPerAppliance * 2; // space + water
+  const applianceCapex = Math.max(
+    0,
+    APPLIANCE_CAPEX.spaceHeatingHeatPump +
+      APPLIANCE_CAPEX.waterHeatingHeatPump +
+      APPLIANCE_CAPEX.cooktopInduction +
+      SWITCHBOARD_UPGRADE_CAPEX -
+      heatPumpSubsidyTotal,
+  );
+  const vehicleCapex   = entries.reduce(
+    (sum, e) => sum + VEHICLE_OPTION_DATA[e.option].evCapex * e.weight,
+    0,
+  );
+  const pvCapexRaw = solarSystemCapex(state, presetSolarKw, solarScenario, years);
+  const pvCapex    = solarScenario !== "grid_only"
+    ? Math.max(0, pvCapexRaw - subsidies.solarPv)
+    : pvCapexRaw;
+  const batteryCapexNet = Math.max(0, batteryCapex - subsidies.batteryPerKwh * presetBatteryKwh);
+  const totalCapex     = applianceCapex + vehicleCapex + pvCapex + batteryCapexNet;
 
   // 1-year view is operating-cost only at current prices (no capex, no finance).
   const { capital, interest } = period === "1year"
     ? { capital: 0, interest: 0 }
     : computeCapitalAndInterest(totalCapex, inputs, years);
 
+  // EV maintenance (service + tyres + consumables) is rolled into the
+  // electricity column alongside fuel + supply (mirrors R annual_opex,
+  // which sums all three).
+  const evMaintenanceCost = evMaintenancePerYear * years;
   // Battery credit reduces the electricity column. Keep it floored at 0 so
   // the chart doesn't render a negative segment.
   const electricity = Math.max(
-    elecRetailCost + evHomeChargeCost + evFastChargeCost + elecSupplyCost - batteryCredit,
+    elecRetailCost + evHomeChargeCost + evFastChargeCost + elecSupplyCost + evMaintenanceCost - batteryCredit,
     0,
   );
   return {
@@ -531,17 +599,16 @@ export function availableOptions(state: StateCode, category: ApplianceCategory):
 
 // Proportional share of electricity supply charge attributable to a function,
 // based on an all-electric household mix. Mirrors R get_elec_supply_share:
-// vehicle contribution is (1 - FAST_CHARGE_FRACTION) × n_vehicles because
-// public DC fast-charge kWh don't pass through the home meter and so don't
-// pay into the home supply charge.
+// vehicle contribution is (1 - FAST_CHARGE_FRACTION) × per-class Wh/km × km
+// summed across the fleet, because public DC fast-charge kWh don't pass
+// through the home meter and so don't pay into the home supply charge.
 function getElecSupplyShare(
   state: StateCode,
   occupants: number,
   category: ApplianceCategory | "Other",
   includeVehicles: boolean,
-  vClass: VehicleClass,
+  entries: VehicleEntry[],
   drivingLevel: DrivingLevel,
-  vehicleCount: number,
 ): number {
   const occScale = getScalingFactor(occupants);
   const heating = (energy("Space Heating", "Electric heat pump", state) +
@@ -549,8 +616,12 @@ function getElecSupplyShare(
   const water   = energy("Water Heating", "Electric heat pump", state) * occScale;
   const cooktop = energy("Cooktop",       "Electric induction", state) * occScale;
   const other   = OTHER_ELEC_KWH_DAY[state] * occScale;
-  const vehicle = (VEHICLE_EFFICIENCY_WH_KM[vClass].electric * kmPerDay(state, drivingLevel)) / 1000
-                  * (1 - FAST_CHARGE_FRACTION) * vehicleCount;
+  const km = kmPerDay(state, drivingLevel);
+  const vehicle = entries.reduce(
+    (sum, e) => sum + (VEHICLE_EFFICIENCY_WH_KM[e.vClass].electric * km) / 1000
+                      * (1 - FAST_CHARGE_FRACTION) * e.weight,
+    0,
+  );
 
   let total = heating + water + cooktop + other;
   if (includeVehicles) total += vehicle;
@@ -602,19 +673,25 @@ const RESISTIVE_HEATING_UNITS = 2;
 const SINGLE_OPTION_VEHICLE_COUNT = 1;
 
 export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInputs): HouseCost {
-  const { state, occupants, dwelling, solarScenario, vehicleOption, drivingLevel } = base;
+  const { state, occupants, dwelling, solarScenario, drivingLevel } = base;
   const { category, option, period, includeCapex } = single;
   const occScale = getScalingFactor(occupants);
   const dwScale = dwelling === "apartment" ? APARTMENT_ENERGY_FACTOR : 1;
   const years = period === "1year" ? 1 : 15;
   const days = 365 * years;
-  const vClass = vehicleClassFromOption(vehicleOption);
+  // Chart 3 always shows the cost of ONE car using the household's first
+  // configured vehicle (the user's primary pick). Mixed fleets are
+  // represented in chart 1; this chart compares a single appliance.
+  const householdEntries = vehicleEntries(base);
+  const primary = householdEntries[0];
+  const primaryOption = primary?.option ?? "byd_dolphin";
+  const vClass = primary?.vClass ?? vehicleClassFromOption(primaryOption);
 
   // --- Energy (kWh/day) ---
   let energyKwhDay = 0;
   let coolingKwhDay = 0; // separate so we can apply cooling's solar fraction
   if (category === "Vehicles") {
-    if (vehicleOption === "no_car") {
+    if (householdEntries.length === 0) {
       // Household is set to "No car"; show zero so the savings box can prompt
       // the user to pick a vehicle.
       return { capital: 0, interest: 0, gas: 0, petrol: 0, electricity: 0, total: 0 };
@@ -691,16 +768,15 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
 
   // --- Supply charge (proportional, per R) ---
   // The all-electric denominator that drives the share uses the household's
-  // actual vehicle count (mirrors R evaluate_option, which threads n_vehicles
-  // through to get_elec_supply_share). The energy term itself stays at 1 car
-  // — we're costing one of this appliance, not the whole fleet.
+  // actual fleet (mirrors R evaluate_option, which threads n_vehicles through
+  // to get_elec_supply_share). The energy term itself stays at 1 car — we're
+  // costing one of this appliance, not the whole fleet.
   let gasSupply = 0;
   let elecSupply = 0;
   if (option.fuel === "electricity") {
     const includeVeh = category === "Vehicles";
     const share = getElecSupplyShare(
-      state, occupants, category, includeVeh, vClass, drivingLevel,
-      effectiveVehicleCount(base),
+      state, occupants, category, includeVeh, householdEntries, drivingLevel,
     );
     const elecPrice = priceFor(state, "electricity", period);
     elecSupply = elecPrice.daily * days * share;
@@ -711,9 +787,30 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
 
   const isGasFuel  = option.fuel === "gas" || option.fuel === "lpg" || option.fuel === "wood";
   const isPetrolFuel = option.fuel === "petrol" || option.fuel === "diesel";
-  const gas         = isGasFuel ? volumeCost + gasSupply : 0;
-  const petrol      = isPetrolFuel ? volumeCost : 0;
-  const electricity = option.fuel === "electricity" ? volumeCost + elecSupply : 0;
+  // Maintenance is appended to the relevant fuel column further down once
+  // vehicleMaintenanceCost is computed (Vehicles category only).
+  let gas         = isGasFuel ? volumeCost + gasSupply : 0;
+  let petrol      = isPetrolFuel ? volumeCost : 0;
+  let electricity = option.fuel === "electricity" ? volumeCost + elecSupply : 0;
+
+  // --- State appliance subsidies (Heat pump rebate from Appliance_subsidies.csv)
+  // The single-appliance heat pump rows attract the heat pump subsidy in
+  // states like VIC. Solar PV / battery rebates don't fire here — those are
+  // tracked on chart 1 + chart 2 where the PV / battery capex actually lives.
+  const subsidies = getApplianceSubsidies(state, dwelling, base.batteryValue === "vpp");
+  const heatPumpEligible =
+    (category === "Space Heating" || category === "Water Heating") &&
+    option.value === "Electric heat pump";
+
+  // --- Vehicle maintenance — operational, rolled into the fuel segment of
+  // the chart. ICE → petrol column, EV → electricity column.
+  let vehicleMaintenanceCost = 0;
+  if (category === "Vehicles") {
+    const perYear = option.fuel === "electricity"
+      ? VEHICLE_MAINTENANCE_ANNUAL[vClass].electric
+      : VEHICLE_MAINTENANCE_ANNUAL[vClass].ice;
+    vehicleMaintenanceCost = perYear * SINGLE_OPTION_VEHICLE_COUNT * years;
+  }
 
   // --- Capex + finance ---
   // Vehicle capex comes from the option-specific table — option.capex is just
@@ -726,8 +823,8 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
     if (category === "Vehicles") {
       const perUnit =
         option.fuel === "electricity"
-          ? VEHICLE_OPTION_DATA[vehicleOption].evCapex
-          : VEHICLE_OPTION_DATA[vehicleOption].iceCapex;
+          ? VEHICLE_OPTION_DATA[primaryOption].evCapex
+          : VEHICLE_OPTION_DATA[primaryOption].iceCapex;
       totalCapex = perUnit * SINGLE_OPTION_VEHICLE_COUNT;
     } else if (category === "Space Heating" && option.value === "Electric resistance") {
       // Resistive heaters cover small zones, so households typically buy a
@@ -736,9 +833,17 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
     } else {
       totalCapex = option.capex;
     }
+    if (heatPumpEligible) {
+      totalCapex = Math.max(0, totalCapex - subsidies.heatPumpPerAppliance);
+    }
     const fin = computeCapitalAndInterest(totalCapex, base, years);
     capital = fin.capital;
     interest = fin.interest;
+  }
+
+  if (vehicleMaintenanceCost > 0) {
+    if (option.fuel === "electricity") electricity += vehicleMaintenanceCost;
+    else if (isPetrolFuel)            petrol      += vehicleMaintenanceCost;
   }
 
   return {
@@ -776,21 +881,22 @@ interface SolarBatteryInputs {
 // electric load kWh, weighted across appliances + home-charged EV kWh. Public
 // DC fast-charge kWh leave the home meter, so they don't pass through solar.
 function householdSelfSufficiency(inputs: HouseInputs) {
-  const { state, occupants, dwelling, solarScenario, vehicleOption, drivingLevel } = inputs;
+  const { state, occupants, dwelling, solarScenario, drivingLevel } = inputs;
   const occScale = getScalingFactor(occupants);
   const dwScale = dwelling === "apartment" ? APARTMENT_ENERGY_FACTOR : 1;
-  const vClass = vehicleClassFromOption(vehicleOption);
-  const vehicleCount = effectiveVehicleCount(inputs);
+  const entries = vehicleEntries(inputs);
 
   const heating  = energy("Space Heating", "Electric heat pump", state) * occScale * dwScale;
   const cooling  = energy("Space Cooling", "Heat pump",          state) * occScale * dwScale;
   const water    = energy("Water Heating", "Electric heat pump", state) * occScale * dwScale;
   const cooktop  = energy("Cooktop",       "Electric induction", state) * occScale * dwScale;
   const other    = OTHER_ELEC_KWH_DAY[state] * occScale * dwScale;
-  const evDaily  = vehicleCount > 0
-    ? (VEHICLE_EFFICIENCY_WH_KM[vClass].electric * kmPerDay(state, drivingLevel)) / 1000
-      * (1 - FAST_CHARGE_FRACTION) * vehicleCount
-    : 0;
+  const km = kmPerDay(state, drivingLevel);
+  const evDaily  = entries.reduce(
+    (sum, e) => sum + (VEHICLE_EFFICIENCY_WH_KM[e.vClass].electric * km) / 1000
+                      * (1 - FAST_CHARGE_FRACTION) * e.weight,
+    0,
+  );
 
   const applianceLoad = heating + cooling + water + cooktop + other;
   const totalLoad = applianceLoad + evDaily;
@@ -946,7 +1052,7 @@ export function solarBatteryEnergyFlows(
 ): SolarBatteryEnergyFlows {
   const years = inputs.period === "1year" ? 1 : 15;
   const flows = annualBatteryFlows(inputs, solarKw, batteryKwh, years);
-  const dailySolarKwh = solarKw > 0 ? SOLAR_DAILY_KWH_PER_KW[inputs.state] * solarKw : 0;
+  const dailySolarKwh = solarKw > 0 ? getSolarDailyKwhPerKw(inputs.state, inputs.postcode) * solarKw : 0;
   const breakdown = householdSelfSufficiency(inputs);
   const dailyConsumptionKwh = breakdown.applianceLoad + breakdown.vehicleLoad;
   return {
@@ -981,7 +1087,7 @@ export function seasonalBatteryTrace(
 ): SeasonalBatteryRow[] {
   const years = inputs.period === "1year" ? 1 : 15;
   if (solarKw <= 0) return [];
-  const dailySolarKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * solarKw;
+  const dailySolarKwh = getSolarDailyKwhPerKw(inputs.state, inputs.postcode) * solarKw;
   const breakdown = householdSelfSufficiency(inputs);
   const dailyConsumptionKwh = breakdown.applianceLoad + breakdown.vehicleLoad;
   if (dailyConsumptionKwh === 0) return [];
@@ -1045,7 +1151,7 @@ function annualBatteryFlows(
     seasonalHeadroomKwh: { ...emptySeasonal },
   };
   if (solarKw <= 0) return empty;
-  const dailySolarKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * solarKw;
+  const dailySolarKwh = getSolarDailyKwhPerKw(inputs.state, inputs.postcode) * solarKw;
   const breakdown = householdSelfSufficiency(inputs);
   const dailyConsumptionKwh = breakdown.applianceLoad + breakdown.vehicleLoad;
   if (dailyConsumptionKwh === 0) return empty;
@@ -1289,7 +1395,7 @@ export function wholeHomeBatteryDiagnostics(inputs: HouseInputs): WholeHomeBatte
   // = discharge / round-trip efficiency; the gap is the round-trip loss.
   const dischargeKwh = flows.batteryStoredKwh;
   const chargeKwh = dischargeKwh / BATTERY_ROUND_TRIP_EFFICIENCY;
-  const generationKwh = SOLAR_DAILY_KWH_PER_KW[inputs.state] * presetSolarKw * 365;
+  const generationKwh = getSolarDailyKwhPerKw(inputs.state, inputs.postcode) * presetSolarKw * 365;
   return {
     active: true,
     solarKw: presetSolarKw,

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Box, MenuItem, Select, Typography, useTheme } from "@mui/material";
+import { Autocomplete, Box, MenuItem, Select, TextField, Typography, useTheme } from "@mui/material";
 import rough from "roughjs";
 import {
   DwellingType,
@@ -18,9 +18,12 @@ import {
   VEHICLE_CLASS_CHOICES,
   VEHICLE_CLASS_CHOICE_LABELS,
   VEHICLE_VARIANTS,
+  VehicleClass,
   VehicleClassChoice,
+  VehicleOption,
   VehicleVariant,
   classFromOption,
+  postcodeToState,
   variantFromOption,
   variantLabel,
   toVehicleOption,
@@ -173,6 +176,152 @@ function InlineSelect<T extends string | number>({
   );
 }
 
+// Inline combobox — freeSolo autocomplete with the same sketched-pill
+// background as InlineSelect. The user can pick a label from the dropdown
+// OR type a free-text value (e.g. a postcode). `onInputSubmit` fires on
+// blur and Enter with the raw typed string so the caller can parse it.
+interface InlineComboProps {
+  value: string;
+  options: { value: string; label: string }[];
+  onSelect: (value: string) => void;
+  onInputSubmit: (raw: string) => void;
+  width?: number | string;
+  placeholder?: string;
+}
+
+function InlineCombo({
+  value, options, onSelect, onInputSubmit, width, placeholder,
+}: InlineComboProps) {
+  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const seedRef = useRef<number>(Math.floor(Math.random() * 1e9));
+  // Local input mirror — held while typing so the field doesn't snap back
+  // to the canonical value mid-edit. Flushed via onInputSubmit on blur /
+  // Enter, then synced back from the props `value` once the parent applies it.
+  const [input, setInput] = useState<string>(
+    options.find((o) => o.value === value)?.label ?? value,
+  );
+  useEffect(() => {
+    setInput(options.find((o) => o.value === value)?.label ?? value);
+  }, [value, options]);
+
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        setDims({
+          w: Math.ceil(e.contentRect.width),
+          h: Math.ceil(e.contentRect.height),
+        });
+      }
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || dims.w <= 0 || dims.h <= 0) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const rc = rough.svg(svg);
+    const inset = 3;
+    const rect = rc.rectangle(inset, inset, dims.w - inset * 2, dims.h - inset * 2, {
+      stroke: HANDWRITTEN_COLOR,
+      strokeWidth: 1.6,
+      fill: "#fffaf3",
+      fillStyle: "solid",
+      roughness: 1.4,
+      bowing: 1.2,
+      seed: seedRef.current,
+    });
+    svg.appendChild(rect);
+  }, [dims]);
+
+  return (
+    <Box
+      component="span"
+      ref={wrapRef}
+      sx={{
+        position: "relative",
+        display: "inline-block",
+        margin: "0 0.15rem",
+        verticalAlign: "middle",
+      }}
+    >
+      <svg
+        ref={svgRef}
+        width={dims.w}
+        height={dims.h}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          pointerEvents: "none",
+        }}
+      />
+      <Autocomplete
+        freeSolo
+        options={options}
+        value={options.find((o) => o.value === value)}
+        inputValue={input}
+        onInputChange={(_e, newInput) => setInput(newInput)}
+        onChange={(_e, picked) => {
+          if (typeof picked === "string") {
+            onInputSubmit(picked);
+          } else if (picked) {
+            onSelect(picked.value);
+          }
+        }}
+        getOptionLabel={(o) => (typeof o === "string" ? o : o.label)}
+        isOptionEqualToValue={(o, v) => o.value === v.value}
+        sx={{
+          width: width ?? 120,
+          "& .MuiInputBase-root": {
+            padding: "0 1.6rem 0 0.55rem !important",
+            fontFamily: HANDWRITTEN_FONT,
+            fontSize: "1.45rem",
+            color: HANDWRITTEN_COLOR,
+            fontWeight: 700,
+            backgroundColor: "transparent",
+          },
+          "& .MuiOutlinedInput-notchedOutline": { border: "none" },
+          "& input": { padding: "0.05rem 0 !important" },
+          "& .MuiAutocomplete-endAdornment": { right: 2 },
+          "& .MuiSvgIcon-root": { color: HANDWRITTEN_COLOR },
+        }}
+        ListboxProps={{
+          sx: {
+            fontFamily: HANDWRITTEN_FONT,
+            color: HANDWRITTEN_COLOR,
+            "& .MuiAutocomplete-option": {
+              fontFamily: HANDWRITTEN_FONT,
+              fontSize: "1.2rem",
+              color: HANDWRITTEN_COLOR,
+            },
+          },
+        }}
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            variant="outlined"
+            size="small"
+            placeholder={placeholder}
+            onBlur={() => onInputSubmit(input)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onInputSubmit(input);
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+        )}
+      />
+    </Box>
+  );
+}
+
 const sentenceSx = {
   fontSize: "1rem",
   lineHeight: 2.1,
@@ -180,14 +329,27 @@ const sentenceSx = {
   mb: 1.25,
 };
 
+// Build a vehicleOptions array of the requested length, preserving the
+// user's existing per-car picks where possible and padding with a sensible
+// default (an "average new SUV" — distinct from the default first car so a
+// 2-car household reads "BYD hatchback and an average new SUV" out of the
+// box). When the count drops the array is truncated.
+const DEFAULT_NEW_CAR: VehicleOption = "suv_new";
+function resizeVehicleOptions(current: VehicleOption[], length: number): VehicleOption[] {
+  const next: VehicleOption[] = [];
+  for (let i = 0; i < length; i++) {
+    next.push(current[i] ?? DEFAULT_NEW_CAR);
+  }
+  return next;
+}
+
 const ControlBox: React.FC<Props> = ({ value, onChange }) => {
   const theme = useTheme();
   const set = <K extends keyof HouseInputs>(key: K, v: HouseInputs[K]) => {
     onChange({ ...value, [key]: v });
   };
 
-  const vClass: VehicleClassChoice = classFromOption(value.vehicleOption);
-  const vVariant: VehicleVariant = variantFromOption(value.vehicleOption);
+  const carEntries: VehicleOption[] = value.vehicleOptions ?? [];
 
   // --- Dwelling change auto-swaps occupants to the matching census average
   //     when the user was sitting on the previous average.
@@ -204,34 +366,38 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     });
   };
 
-  // --- Vehicle count: 0 forces vehicleOption to "no_car"; any positive value
-  //     restores a sensible default option if the user was at "no_car".
+  // --- Vehicle count: 0 zeroes the options array; any positive value resizes
+  //     the array to the requested length, preserving prior picks. The
+  //     fractional "average" preset (1.8) collapses to a single shared car.
   const setVehicleCount = (count: number) => {
     if (count === 0) {
-      onChange({ ...value, vehicles: 0, vehicleOption: "no_car" });
+      onChange({ ...value, vehicles: 0, vehicleOptions: [] });
       return;
     }
-    if (value.vehicleOption === "no_car") {
-      onChange({
-        ...value,
-        vehicles: count,
-        vehicleOption: toVehicleOption("hatchback", "byd"),
-      });
-    } else {
-      set("vehicles", count);
-    }
+    const targetLength = Number.isInteger(count) ? count : 1;
+    onChange({
+      ...value,
+      vehicles: count,
+      vehicleOptions: resizeVehicleOptions(carEntries, targetLength),
+    });
   };
 
-  const setClass = (next: VehicleClassChoice) => {
-    if (next === "no_car") {
-      onChange({ ...value, vehicles: 0, vehicleOption: "no_car" });
-    } else {
-      set("vehicleOption", toVehicleOption(next, vVariant));
-    }
+  // Per-car class / variant setters update vehicleOptions[index] only.
+  const setCarClass = (index: number, next: VehicleClassChoice) => {
+    if (next === "no_car") return; // class selector excludes "no_car"
+    const current = carEntries[index] ?? DEFAULT_NEW_CAR;
+    const variant = variantFromOption(current);
+    const updated = [...carEntries];
+    updated[index] = toVehicleOption(next, variant);
+    set("vehicleOptions", updated);
   };
-  const setVariant = (next: VehicleVariant) => {
-    if (vClass === "no_car") return;
-    set("vehicleOption", toVehicleOption(vClass, next));
+  const setCarVariant = (index: number, next: VehicleVariant) => {
+    const current = carEntries[index] ?? DEFAULT_NEW_CAR;
+    const cls = classFromOption(current);
+    if (cls === "no_car") return;
+    const updated = [...carEntries];
+    updated[index] = toVehicleOption(cls, next);
+    set("vehicleOptions", updated);
   };
 
   // --- Options for each inline dropdown ---
@@ -246,7 +412,7 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     { value: avgOccupants, label: avgOccupants.toFixed(1) + " (avg)" },
     ...OCCUPANT_INTS.map((n) => ({ value: n, label: String(n) })),
   ];
-  const vehicleCount = value.vehicleOption === "no_car" ? 0 : value.vehicles;
+  const vehicleCount = value.vehicles;
   const vehicleCountOptions: { value: number; label: string }[] = [
     { value: AVG_VEHICLES, label: AVG_VEHICLES + " (avg)" },
     ...VEHICLE_INTS.map((n) => ({ value: n, label: String(n) })),
@@ -257,13 +423,13 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
       value: c,
       label: VEHICLE_CLASS_CHOICE_LABELS[c].toLowerCase(),
     }));
-  const variantOptions: { value: VehicleVariant; label: string }[] =
-    vClass === "no_car"
-      ? []
-      : VEHICLE_VARIANTS.map((v) => ({
-          value: v,
-          label: variantLabel(v, vClass).toLowerCase(),
-        }));
+  // Variant labels: "average new" / "average used" stay lower-case to read
+  // as inline scribble; "BYD" is a brand name and stays uppercase.
+  const buildVariantOptions = (cls: VehicleClass): { value: VehicleVariant; label: string }[] =>
+    VEHICLE_VARIANTS.map((v) => ({
+      value: v,
+      label: variantLabel(v, cls),
+    }));
   const distanceOptions = DRIVING_LEVELS.map((lvl) => ({
     value: lvl,
     label: DRIVING_LEVEL_LABELS[lvl],
@@ -286,9 +452,55 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     { value: "solar_optimised", label: "solar with smart timers on appliances" },
   ];
 
-  const dwellingArticle = value.dwelling === "apartment" ? "an" : "a";
   const hasCar = vehicleCount > 0;
   const carPhrase = hasCar && vehicleCount === 1 ? "car" : "cars";
+  // "These are" only fits when there's more than one car; with one car
+  // "It is" reads better. For 1.8 (avg) we still treat as multi-car.
+  const chargedSubject = vehicleCount === 1 ? "It is" : "These are";
+  const isGridOnly = value.solarScenario === "grid_only";
+
+  // --- Per-car selector helper. Renders "an average new SUV" / "a BYD
+  // hatchback" — the article ("a"/"an") flips based on the variant label
+  // since "average" starts with a vowel sound while "BYD" doesn't. Used by
+  // the car description sentence for each car configured.
+  const renderCarPhrase = (index: number) => {
+    const opt = carEntries[index] ?? DEFAULT_NEW_CAR;
+    const cls = classFromOption(opt);
+    const variant = variantFromOption(opt);
+    if (cls === "no_car") return null;
+    const article = variant === "byd" ? "a" : "an";
+    return (
+      <>
+        {article}{" "}
+        <InlineSelect
+          value={variant}
+          options={buildVariantOptions(cls)}
+          onChange={(v: VehicleVariant) => setCarVariant(index, v)}
+        />{" "}
+        <InlineSelect
+          value={cls}
+          options={classOptions}
+          onChange={(v: VehicleClassChoice) => setCarClass(index, v)}
+        />
+      </>
+    );
+  };
+
+  // Build the comma-separated list of car phrases. For an integer count N
+  // we render N selectors; for 1.8 (average) we render a single shared
+  // selector applied to all 1.8 average cars.
+  const carPhraseCount = Number.isInteger(vehicleCount) ? vehicleCount : 1;
+  const carPhraseNodes: React.ReactNode[] = [];
+  for (let i = 0; i < carPhraseCount; i++) {
+    if (i > 0) {
+      carPhraseNodes.push(carPhraseCount === 2 && i === 1 ? " and " : i === carPhraseCount - 1 ? ", and " : ", ");
+    }
+    carPhraseNodes.push(<React.Fragment key={i}>{renderCarPhrase(i)}</React.Fragment>);
+  }
+
+  // VehicleGraphic only renders sensibly for a single class — show the
+  // first car's drawing as the visual anchor.
+  const firstCarClass = carEntries.length > 0 ? classFromOption(carEntries[0]) : null;
 
   return (
     <Box
@@ -301,81 +513,109 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
       }}
     >
       <Typography variant="h3" sx={{ mt: 0, mb: 1.5, fontSize: "1.05rem" }}>
-        About my home
+        About this home
       </Typography>
 
       <Typography component="div" sx={sentenceSx}>
-        I live in {dwellingArticle}{" "}
+        This{" "}
         <InlineSelect
           value={value.dwelling}
           options={dwellingOptions}
           onChange={(v) => setDwelling(v)}
         />{" "}
-        in{" "}
-        <InlineSelect
-          value={value.state}
-          options={stateOptions}
-          onChange={(v: StateCode) => set("state", v)}
-        />.
-      </Typography>
-
-      <Typography component="div" sx={sentenceSx}>
+        is in{" "}
+        <InlineCombo
+          // Show the postcode digits when one is set so the user can see
+          // they're on a postcode-precision read; otherwise display the
+          // state label as before.
+          value={value.postcode !== undefined ? String(value.postcode) : value.state}
+          options={stateOptions.map((s) => ({ value: s.value, label: s.label }))}
+          onSelect={(v) => {
+            // Picking a state from the dropdown clears the postcode — the
+            // user is asking for a state-level view again.
+            onChange({ ...value, state: v as StateCode, postcode: undefined });
+          }}
+          onInputSubmit={(raw) => {
+            const trimmed = raw.trim();
+            if (!trimmed) return;
+            const matched = stateOptions.find(
+              (s) => s.label.toLowerCase() === trimmed.toLowerCase() ||
+                     s.value.toLowerCase() === trimmed.toLowerCase(),
+            );
+            if (matched) {
+              onChange({ ...value, state: matched.value as StateCode, postcode: undefined });
+              return;
+            }
+            // 4-digit postcode → resolve to its state but persist the
+            // postcode so postcode-keyed lookups (e.g. solar irradiance)
+            // can use it. Leave inputs alone if the digits don't map to a
+            // known state range.
+            if (/^\d{4}$/.test(trimmed)) {
+              const pc = parseInt(trimmed, 10);
+              const resolved = postcodeToState(pc);
+              if (resolved) onChange({ ...value, state: resolved, postcode: pc });
+            }
+          }}
+          width={140}
+          placeholder="state or postcode"
+        />{" "}
+        with{" "}
         <InlineSelect
           value={value.occupants}
           options={occupantOptions}
           onChange={(v: number) => set("occupants", v)}
         />{" "}
-        people live here with{" "}
+        occupants and{" "}
         <InlineSelect
           value={vehicleCount}
           options={vehicleCountOptions}
           onChange={(v: number) => setVehicleCount(v)}
         />{" "}
-        {carPhrase}.
+        {carPhrase}
         {hasCar && (
           <>
-            {" "}
-            Our electric car would be{" "}
-            {/* "an average new …" vs "a BYD …" — "byd" starts with a
-                consonant sound, the two average variants start with a
-                vowel. */}
-            {vVariant === "byd" ? "a" : "an"}{" "}
-            <InlineSelect
-              value={vVariant}
-              options={variantOptions}
-              onChange={(v: VehicleVariant) => setVariant(v)}
-            />{" "}
-            <InlineSelect
-              value={vClass}
-              options={classOptions}
-              onChange={(v: VehicleClassChoice) => setClass(v)}
-            />
-            .{" "}
-            I usually drive{" "}
+            {" "}which {vehicleCount === 1 ? "usually drives" : "each usually drive"}{" "}
             <InlineSelect
               value={value.drivingLevel}
               options={distanceOptions}
               onChange={(v: DrivingLevel) => set("drivingLevel", v)}
             />{" "}
-            km a week. I charge on solar and an{" "}
-            <InlineSelect
-              value={value.evTariff}
-              options={evTariffOptions}
-              onChange={(v: EvTariff) => set("evTariff", v)}
-            />{" "}
-            tariff.
+            km a week
           </>
         )}
+        .
       </Typography>
 
       {hasCar && (
+        <Typography component="div" sx={sentenceSx}>
+          The electric car would be {carPhraseNodes}.
+        </Typography>
+      )}
+
+      {firstCarClass && firstCarClass !== "no_car" && (
         <Box sx={{ mb: 1, mt: -0.5 }}>
-          <VehicleGraphic vClass={vClass} />
+          <VehicleGraphic vClass={firstCarClass} />
         </Box>
       )}
 
+      {hasCar && (
+        <Typography component="div" sx={sentenceSx}>
+          {chargedSubject} charged on{" "}
+          {!isGridOnly && (
+            <>solar and </>
+          )}
+          an{" "}
+          <InlineSelect
+            value={value.evTariff}
+            options={evTariffOptions}
+            onChange={(v: EvTariff) => set("evTariff", v)}
+          />{" "}
+          tariff.
+        </Typography>
+      )}
+
       <Typography component="div" sx={sentenceSx}>
-        I'll pay for upgrades with{" "}
+        Upgrades are paid for with{" "}
         <InlineSelect
           value={value.finance ? "loan" : "cash"}
           options={financeOptions}
@@ -385,13 +625,13 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
       </Typography>
 
       <Typography component="div" sx={sentenceSx}>
-        Show me my savings over{" "}
+        Show the savings over{" "}
         <InlineSelect
           value={value.period}
           options={periodOptions}
           onChange={(v: Period) => set("period", v)}
         />{" "}
-        years, assuming we have{" "}
+        years, assuming there are{" "}
         <InlineSelect
           value={value.solarScenario}
           options={scenarioOptions}

@@ -33,7 +33,7 @@ const SCENARIOS: Scenario[] = [
   { id: "S06", description: "NSW / 15yr cash / solar",            overrides: { finance: false, solarScenario: "solar", state: "NSW" } },
   { id: "S07", description: "WA / 15yr cash / grid only",         overrides: { finance: false, solarScenario: "grid_only", state: "WA" } },
   { id: "S08", description: "NT / 15yr cash / grid only (LPG)",   overrides: { finance: false, solarScenario: "grid_only", state: "NT" } },
-  { id: "S09", description: "AUS no-car / 15yr cash / solar",     overrides: { finance: false, solarScenario: "solar", vehicleOption: "no_car", vehicles: 0 } },
+  { id: "S09", description: "AUS no-car / 15yr cash / solar",     overrides: { finance: false, solarScenario: "solar", vehicleOptions: [], vehicles: 0 } },
   { id: "S10", description: "AUS apartment / 1 occ / 15yr cash / solar", overrides: { finance: false, solarScenario: "solar", dwelling: "apartment", occupants: 1 } },
 ];
 

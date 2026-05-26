@@ -47,11 +47,12 @@ const Home: React.FC = () => {
         backgroundColor: theme.palette.background.default,
       }}
     >
-      <Typography variant="h1">All-gas vs all-electric home</Typography>
+      <Typography variant="h1">Fossil fuel vs all-electric home</Typography>
       <Typography variant="subtitle1" sx={{ mb: 2 }}>
-        Comparing the total cost of running a fully gas-powered home against a
-        fully electrified one, using Rewiring Australia's 2026 Energy Savings
-        Model.
+        Internal Rewiring Australia tool for estimating the savings a specific
+        household in a specific place can expect from going all-electric.
+        Numbers come from the 2026 Energy Savings Model — adjust the household
+        on the right to match the one you want to size up.
       </Typography>
 
       <Box
@@ -63,6 +64,36 @@ const Home: React.FC = () => {
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
+          <ComparisonChart
+            title={(() => {
+              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
+              return result.years === 1
+                ? `Whole ${noun} — 1 year operating cost (current prices)`
+                : `Whole ${noun} — total cost over ${result.years} years`;
+            })()}
+            footer={(() => {
+              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
+              // Numbers pronounced starting with a vowel take "an": 8 (eight),
+              // 11 (eleven), 18 (eighteen), and any multiple starting with
+              // those digits (80, 800, 1800…). All other leading digits → "a".
+              const s = String(batteryDiag.batteryKwh);
+              const battArticle = /^(8|11|18)/.test(s) ? "an" : "a";
+              return `The all-electric ${noun} has ${batteryDiag.solarKw} kW of rooftop solar and ${battArticle} ${batteryDiag.batteryKwh} kWh battery. Electricity costs include costs and credits.`;
+            })()}
+            bars={[
+              {
+                label: `Fossil fuel ${inputs.dwelling === "apartment" ? "apartment" : "house"}`,
+                cost: result.gas,
+              },
+              {
+                label: `All-electric ${inputs.dwelling === "apartment" ? "apartment" : "house"}`,
+                cost: result.electric,
+              },
+            ]}
+            showSavingsBox
+            years={result.years}
+          />
+
           <Box
             sx={{
               display: "flex",
@@ -72,9 +103,10 @@ const Home: React.FC = () => {
               padding: "0.6rem 1rem",
               backgroundColor: theme.palette.background.paper,
               border: "1px solid #d7d5cd",
-              borderBottom: "none",
-              borderTopLeftRadius: 4,
-              borderTopRightRadius: 4,
+              borderTop: "none",
+              borderBottomLeftRadius: 4,
+              borderBottomRightRadius: 4,
+              marginTop: "-1px", // join visually to the bottom of the chart card
             }}
           >
             <Typography
@@ -220,35 +252,6 @@ const Home: React.FC = () => {
               )}
             </Box>
           </Box>
-          <ComparisonChart
-            title={(() => {
-              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
-              return result.years === 1
-                ? `Whole ${noun} — 1 year operating cost (current prices)`
-                : `Whole ${noun} — total cost over ${result.years} years`;
-            })()}
-            footer={(() => {
-              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
-              // Numbers pronounced starting with a vowel take "an": 8 (eight),
-              // 11 (eleven), 18 (eighteen), and any multiple starting with
-              // those digits (80, 800, 1800…). All other leading digits → "a".
-              const s = String(batteryDiag.batteryKwh);
-              const battArticle = /^(8|11|18)/.test(s) ? "an" : "a";
-              return `The all-electric ${noun} has ${batteryDiag.solarKw} kW of rooftop solar and ${battArticle} ${batteryDiag.batteryKwh} kWh battery. Electricity costs include costs and credits.`;
-            })()}
-            bars={[
-              {
-                label: `All-gas ${inputs.dwelling === "apartment" ? "apartment" : "house"}`,
-                cost: result.gas,
-              },
-              {
-                label: `All-electric ${inputs.dwelling === "apartment" ? "apartment" : "house"}`,
-                cost: result.electric,
-              },
-            ]}
-            showSavingsBox
-            years={result.years}
-          />
 
           <SingleApplianceSection baseInputs={inputs} />
         </Box>

@@ -157,7 +157,10 @@ const RoughBarColumn: React.FC<{
       // wouldn't fit at 10 px font and was getting clipped on the right.
       const showHeading = savingsPx >= 56;
       const showSubheading = savingsPx >= 110 && years > 1;
-      const showAnnual = savingsPx >= 90 && years > 1;
+      // Show the / yr average underneath the headline figure whenever there's
+      // room for the heading too; the small typeface stays legible even in a
+      // compact 56-px callout.
+      const showAnnual = savingsPx >= 56 && years > 1;
       const amountSize = savingsPx >= 110 ? 26 : savingsPx >= 70 ? 22 : 18;
       const headingText = positive ? "SAVINGS" : "EXTRA COST";
       const subheadingText = years > 1 ? `over ${years} yrs` : "";
@@ -203,12 +206,15 @@ const RoughBarColumn: React.FC<{
     let y = maxPx;
     for (const seg of segments) {
       y -= seg.segPx;
+      // Denser hachure (smaller gap + heavier weight) shades the segment in
+      // more solidly, giving the label backdrop a darker, less noisy field
+      // to sit against. The colour itself is unchanged.
       const node = rc.rectangle(0, y, width, seg.segPx, {
         fill: SEGMENT_COLORS[seg.key],
         fillStyle: "hachure",
-        hachureGap: 3,
+        hachureGap: 2.2,
         hachureAngle: 41,
-        fillWeight: 1.6,
+        fillWeight: 2.4,
         roughness: 1.4,
         stroke: "#222",
         strokeWidth: 1.2,
@@ -216,22 +222,42 @@ const RoughBarColumn: React.FC<{
       });
       svg.appendChild(node);
       if (seg.segPx > 22) {
+        const labelText = formatMoney(seg.value);
+        const labelSize = 13;
+        const labelCx = width / 2;
+        const labelCy = y + seg.segPx / 2;
+        // Width estimate — SVG can't measure text before it's mounted, so
+        // approximate from glyph count × half-em. Works for the $1,234 /
+        // $234,000 strings we render here.
+        const approxWidth = labelText.length * labelSize * 0.55 + 14;
+        const padY = 4;
+        const bg = document.createElementNS(ns, "rect");
+        bg.setAttribute("x", String(labelCx - approxWidth / 2));
+        bg.setAttribute("y", String(labelCy - labelSize / 2 - padY));
+        bg.setAttribute("width", String(approxWidth));
+        bg.setAttribute("height", String(labelSize + padY * 2));
+        bg.setAttribute("rx", "4");
+        bg.setAttribute("ry", "4");
+        // Near-opaque white backdrop punches the value out of the hachured
+        // bar without breaking the hand-drawn look — a small alpha keeps the
+        // colour faintly visible underneath.
+        bg.setAttribute("fill", "#ffffff");
+        bg.setAttribute("fill-opacity", "0.92");
+        bg.setAttribute("stroke", "#222");
+        bg.setAttribute("stroke-width", "0.6");
+        bg.style.pointerEvents = "none";
+        svg.appendChild(bg);
+
         const text = document.createElementNS(ns, "text");
-        text.setAttribute("x", String(width / 2));
-        text.setAttribute("y", String(y + seg.segPx / 2));
+        text.setAttribute("x", String(labelCx));
+        text.setAttribute("y", String(labelCy));
         text.setAttribute("text-anchor", "middle");
         text.setAttribute("dominant-baseline", "middle");
-        text.setAttribute("font-size", "12");
+        text.setAttribute("font-size", String(labelSize));
         text.setAttribute("font-weight", "700");
-        text.setAttribute("fill", "#222");
-        // White halo behind the black glyphs — keeps the label legible on
-        // dark hachured fills without changing the black text colour.
-        text.setAttribute("stroke", "#fff");
-        text.setAttribute("stroke-width", "3");
-        text.setAttribute("stroke-linejoin", "round");
-        text.setAttribute("paint-order", "stroke fill");
+        text.setAttribute("fill", "#1a1a1a");
         text.style.pointerEvents = "none";
-        text.textContent = formatMoney(seg.value);
+        text.textContent = labelText;
         svg.appendChild(text);
       }
 

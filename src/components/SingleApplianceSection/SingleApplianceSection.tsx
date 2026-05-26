@@ -385,9 +385,9 @@ const SbBar: React.FC<{
       const node = rc.rectangle(x, y, w, h, {
         fill: SB_SEGMENT_COLORS[key],
         fillStyle: "hachure",
-        hachureGap: 3,
+        hachureGap: 2.2,
         hachureAngle: 41,
-        fillWeight: 1.6,
+        fillWeight: 2.4,
         roughness: 1.4,
         stroke: "#222",
         strokeWidth: 1.2,
@@ -395,20 +395,36 @@ const SbBar: React.FC<{
       });
       svg.appendChild(node);
       if (h > 22) {
+        const labelText = sbFormatMoney(value);
+        const labelSize = 12;
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        const approxWidth = labelText.length * labelSize * 0.55 + 12;
+        const padY = 3;
+        const bg = document.createElementNS(ns, "rect");
+        bg.setAttribute("x", String(cx - approxWidth / 2));
+        bg.setAttribute("y", String(cy - labelSize / 2 - padY));
+        bg.setAttribute("width", String(approxWidth));
+        bg.setAttribute("height", String(labelSize + padY * 2));
+        bg.setAttribute("rx", "4");
+        bg.setAttribute("ry", "4");
+        bg.setAttribute("fill", "#ffffff");
+        bg.setAttribute("fill-opacity", "0.92");
+        bg.setAttribute("stroke", "#222");
+        bg.setAttribute("stroke-width", "0.6");
+        bg.style.pointerEvents = "none";
+        svg.appendChild(bg);
+
         const text = document.createElementNS(ns, "text");
-        text.setAttribute("x", String(x + w / 2));
-        text.setAttribute("y", String(y + h / 2));
+        text.setAttribute("x", String(cx));
+        text.setAttribute("y", String(cy));
         text.setAttribute("text-anchor", "middle");
         text.setAttribute("dominant-baseline", "middle");
-        text.setAttribute("font-size", "11");
+        text.setAttribute("font-size", String(labelSize));
         text.setAttribute("font-weight", "700");
-        text.setAttribute("fill", "#222");
-        text.setAttribute("stroke", "#fff");
-        text.setAttribute("stroke-width", "3");
-        text.setAttribute("stroke-linejoin", "round");
-        text.setAttribute("paint-order", "stroke fill");
+        text.setAttribute("fill", "#1a1a1a");
         text.style.pointerEvents = "none";
-        text.textContent = sbFormatMoney(value);
+        text.textContent = labelText;
         svg.appendChild(text);
       }
 
@@ -565,28 +581,6 @@ const SolarBatteryChart: React.FC<{
       <Typography variant="h2" sx={{ textAlign: "center", mt: 0, mb: 0.5 }}>
         {title}
       </Typography>
-
-      {/* Upfront cost summary — same for all three bars, stated once. */}
-      <Box
-        sx={{
-          textAlign: "center",
-          padding: "0.5rem 0.75rem",
-          backgroundColor: "#f5f4ee",
-          border: "1px dashed #d7d5cd",
-          borderRadius: 0.75,
-          mb: 1.5,
-        }}
-      >
-        <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "#444" }}>
-          Upfront cost: {sbFormatMoney(totalCapex)} ({solarKw} kW solar + {batteryKwh} kWh battery)
-        </Typography>
-        {baseInputs.finance && (
-          <Typography variant="caption" sx={{ display: "block", color: "#555", lineHeight: 1.4 }}>
-            Financed at {(baseInputs.loanRate * 100).toFixed(1)}% over {baseInputs.loanTerm} yrs →{" "}
-            {sbFormatMoney(annual)}/yr · total {sbFormatMoney(totalLoanCost)}
-          </Typography>
-        )}
-      </Box>
 
       <Typography variant="caption" sx={{ display: "block", textAlign: "center", color: "#555", mb: 1 }}>
         Savings over {years === 1 ? "1 year" : `${years} years`} by battery export mode
@@ -978,7 +972,9 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
     ? `Battery — savings by export mode`
     : `${costViewLabel} — ${category.toLowerCase()} options (${years} year${years === 1 ? "" : "s"})`;
 
-  const noCar = baseInputs.vehicleOption === "no_car";
+  // Household has no car when either count is 0 or vehicleOptions is empty
+  // (defensive — these are kept in sync by ControlBox).
+  const noCar = baseInputs.vehicles <= 0 || (baseInputs.vehicleOptions ?? []).length === 0;
 
   return (
     <Box
