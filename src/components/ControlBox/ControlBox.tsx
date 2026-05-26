@@ -558,14 +558,17 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
           }}
           width={140}
           placeholder="state or postcode"
-        />{" "}
-        with{" "}
+        />.
+      </Typography>
+
+      <Typography component="div" sx={sentenceSx}>
+        There {value.occupants === 1 ? "is" : "are"}{" "}
         <InlineSelect
           value={value.occupants}
           options={occupantOptions}
           onChange={(v: number) => set("occupants", v)}
         />{" "}
-        occupants and{" "}
+        {value.occupants === 1 ? "occupant" : "occupants"} and{" "}
         <InlineSelect
           value={vehicleCount}
           options={vehicleCountOptions}

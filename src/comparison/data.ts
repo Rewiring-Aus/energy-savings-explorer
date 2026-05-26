@@ -162,33 +162,36 @@ export const VEHICLE_EFFICIENCY_WH_KM: Record<VehicleClass, { electric: number; 
 };
 
 // ---------------------------------------------------------------------------
-// average_km_per_day_by_state.csv — three driving levels per state.
+// average_km_per_day_by_state.csv — four driving levels per state.
 // "middle" is the state average (canonical R default); "low" / "high" are
-// 60% / 140% of middle (matches the columns in the CSV).
+// 60% / 140% of middle; "v_low" (very low) is ≈ 33% of middle — captures
+// occasional drivers / second cars / low-km retirees (≈ 12 km/day = 84 km/wk).
 // ---------------------------------------------------------------------------
 
-export type DrivingLevel = "low" | "middle" | "high";
+export type DrivingLevel = "v_low" | "low" | "middle" | "high";
 
-export const DRIVING_LEVELS: DrivingLevel[] = ["low", "middle", "high"];
+export const DRIVING_LEVELS: DrivingLevel[] = ["v_low", "low", "middle", "high"];
 
-// Labels reflect typical km-per-week ranges that map onto the three CSV
-// columns (low ≈ 150 km/wk, middle ≈ 250 km/wk, high ≈ 350 km/wk for AUS).
+// Labels reflect typical km-per-week ranges that map onto the four CSV
+// columns (v_low ≈ 84 km/wk, low ≈ 150 km/wk, middle ≈ 250 km/wk,
+// high ≈ 350 km/wk for AUS).
 export const DRIVING_LEVEL_LABELS: Record<DrivingLevel, string> = {
-  low: "100–200",
+  v_low:  "<100",
+  low:    "100–200",
   middle: "200–300",
-  high: "300+",
+  high:   "300+",
 };
 
 export const KM_PER_DAY_BY_LEVEL: Record<StateCode, Record<DrivingLevel, number>> = {
-  AUS: { low: 21.84, middle: 36.4,  high: 50.96 },
-  NSW: { low: 21.72, middle: 36.2,  high: 50.68 },
-  ACT: { low: 21.06, middle: 35.1,  high: 49.14 },
-  NT:  { low: 21.54, middle: 35.9,  high: 50.26 },
-  QLD: { low: 22.14, middle: 36.9,  high: 51.66 },
-  SA:  { low: 21.0,  middle: 35.0,  high: 49.0 },
-  TAS: { low: 19.86, middle: 33.1,  high: 46.34 },
-  VIC: { low: 22.8,  middle: 38.0,  high: 53.2 },
-  WA:  { low: 20.28, middle: 33.8,  high: 47.32 },
+  AUS: { v_low: 12.012, low: 21.84, middle: 36.4,  high: 50.96 },
+  NSW: { v_low: 11.946, low: 21.72, middle: 36.2,  high: 50.68 },
+  ACT: { v_low: 11.583, low: 21.06, middle: 35.1,  high: 49.14 },
+  NT:  { v_low: 11.847, low: 21.54, middle: 35.9,  high: 50.26 },
+  QLD: { v_low: 12.177, low: 22.14, middle: 36.9,  high: 51.66 },
+  SA:  { v_low: 11.55,  low: 21.0,  middle: 35.0,  high: 49.0 },
+  TAS: { v_low: 10.923, low: 19.86, middle: 33.1,  high: 46.34 },
+  VIC: { v_low: 12.54,  low: 22.8,  middle: 38.0,  high: 53.2 },
+  WA:  { v_low: 11.154, low: 20.28, middle: 33.8,  high: 47.32 },
 };
 
 export function kmPerDay(state: StateCode, level: DrivingLevel): number {
