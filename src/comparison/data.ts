@@ -664,6 +664,22 @@ export const APPLIANCE_CAPEX = {
 // cooling_only_capex.
 export const COOLING_ONLY_CAPEX = 2000;
 
+// Number of heating units a typical home in each state owns (multi-zone
+// ducted, multiple split heads, plug-in heaters, etc.). Ported from
+// Heater_numbers_by_state.csv. Used to scale *heating capex only* — energy
+// figures are already whole-of-household in average_energy_use_by_appliance.
+export const HEATER_COUNT_BY_STATE: Record<StateCode, number> = {
+  AUS: 2,
+  NSW: 2,
+  VIC: 3,
+  QLD: 1,
+  SA:  2,
+  WA:  2,
+  TAS: 3,
+  ACT: 3,
+  NT:  1,
+};
+
 // One-off switchboard upgrade added to all-electric scenarios to cover the
 // cumulative load of heat pump heating + heat pump HW + induction + EV
 // charging. Mirrors R model switchboard_upgrade_capex.

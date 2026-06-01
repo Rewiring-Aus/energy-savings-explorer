@@ -20,6 +20,7 @@ import {
   FIT_BY_STATE,
   Fuel,
   FUEL_PRICES,
+  HEATER_COUNT_BY_STATE,
   INVERTER_KW,
   LARGE_SYSTEM_INVERTER_KW,
   LARGE_SYSTEM_SOLAR_KWP,
@@ -355,8 +356,15 @@ export function evaluateAllGasHouse(inputs: HouseInputs): HouseCost {
   // Fossil-heated households still need cooling — add a standalone split-AC
   // capex alongside the fossil heating + water + cooktop kit. Mirrors R model
   // cooling_only_capex in evaluate_household. The cooling kWh is already in
-  // elecDemand above.
-  const applianceCapex = fossilCapexHeating + fossilCapexWater + fossilCapexCooktop + COOLING_ONLY_CAPEX;
+  // elecDemand above. Heating capex scales by the state's typical heater
+  // count (Heater_numbers_by_state.csv) — energy is unchanged because
+  // ENERGY_USE is already whole-of-household.
+  const nHeaters = HEATER_COUNT_BY_STATE[state];
+  const applianceCapex =
+    fossilCapexHeating * nHeaters +
+    fossilCapexWater +
+    fossilCapexCooktop +
+    COOLING_ONLY_CAPEX;
   const vehicleCapex   = entries.reduce(
     (sum, e) => sum + VEHICLE_OPTION_DATA[e.option].iceCapex * e.weight,
     0,
@@ -487,15 +495,20 @@ export function evaluateAllElectricHouse(inputs: HouseInputs): HouseCost {
   }
 
   // State appliance subsidies (Appliance_subsidies.csv). Heat pump rebate
-  // fires for both heat pump appliances (space heating + water heating).
-  // Solar PV rebate is a flat $ off the install; battery rebate is $/kWh ×
-  // battery size and only fires under VPP enrolment (visualiser maps to
-  // batteryValue === "vpp"). Capex floors at 0.
+  // fires once per heat pump appliance category (space heating + water
+  // heating), regardless of how many heating units are installed — mirrors
+  // R get_appliance_subsidy. Solar PV rebate is a flat $ off the install;
+  // battery rebate is $/kWh × battery size and only fires under VPP enrolment
+  // (visualiser maps to batteryValue === "vpp"). Capex floors at 0.
   const subsidies = getApplianceSubsidies(state, dwelling, inputs.batteryValue === "vpp");
   const heatPumpSubsidyTotal = subsidies.heatPumpPerAppliance * 2; // space + water
+  // Heating capex scales by the state's typical heater count
+  // (Heater_numbers_by_state.csv) — one reverse-cycle AC per heating zone.
+  // Energy is whole-of-household so it doesn't change.
+  const nHeaters = HEATER_COUNT_BY_STATE[state];
   const applianceCapex = Math.max(
     0,
-    APPLIANCE_CAPEX.spaceHeatingHeatPump +
+    APPLIANCE_CAPEX.spaceHeatingHeatPump * nHeaters +
       APPLIANCE_CAPEX.waterHeatingHeatPump +
       APPLIANCE_CAPEX.cooktopInduction +
       SWITCHBOARD_UPGRADE_CAPEX -
@@ -665,14 +678,16 @@ export interface SingleOptionInputs {
 }
 
 // Per-option unit assumptions for the "compare a single appliance" chart.
-// We're showing what a typical setup costs for one of each appliance, not a
-// whole household, so we assume:
-//   - Resistive heaters: 2 units (small zone coverage; matches R model's
-//     n_units=2 on the resistance row in compare_space_heating())
-//   - All other heating types (gas, LPG, heat pump): 1 unit
+// We're showing what a typical setup costs for one of each appliance, so:
+//   - Space heating gas / LPG / heat pump: N units, where N = HEATER_COUNT_BY_STATE[state].
+//   - Space heating resistive: N × 2 units. Resistive units cover a smaller
+//     zone each, so households install roughly twice as many per heating zone.
+//   Mirrors R compare_space_heating(), which passes n_units = get_heater_count(state)
+//   for gas/LPG/heat pump and n_units = get_heater_count(state) * 2 for resistive.
+//   Energy use is whole-of-household so it doesn't scale — only capex does.
 //   - Water heating / cooktop: 1 unit
 //   - Vehicles: 1 car (overrides the household's count)
-const RESISTIVE_HEATING_UNITS = 2;
+const RESISTIVE_UNITS_PER_HEATER = 2;
 const SINGLE_OPTION_VEHICLE_COUNT = 1;
 
 export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInputs): HouseCost {
@@ -824,10 +839,15 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
           ? VEHICLE_OPTION_DATA[primaryOption].evCapex
           : VEHICLE_OPTION_DATA[primaryOption].iceCapex;
       totalCapex = perUnit * SINGLE_OPTION_VEHICLE_COUNT;
-    } else if (category === "Space Heating" && option.value === "Electric resistance") {
-      // Resistive heaters cover small zones, so households typically buy a
-      // pair (e.g. living + bedroom). Other heater types remain at 1 unit.
-      totalCapex = option.capex * RESISTIVE_HEATING_UNITS;
+    } else if (category === "Space Heating") {
+      // Heater capex scales by the state's typical heater count (gas, LPG,
+      // resistive, heat pump alike — one unit per heating zone). Resistive
+      // doubles on top of that because each unit covers a smaller area.
+      // Energy is whole-of-household so this only affects capex.
+      const heaterUnits = option.value === "Electric resistance"
+        ? HEATER_COUNT_BY_STATE[state] * RESISTIVE_UNITS_PER_HEATER
+        : HEATER_COUNT_BY_STATE[state];
+      totalCapex = option.capex * heaterUnits;
     } else {
       totalCapex = option.capex;
     }
