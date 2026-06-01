@@ -42,19 +42,20 @@ const AVG_VEHICLES = 1.8;
 const OCCUPANT_INTS = [1, 2, 3, 4, 5];
 const VEHICLE_INTS = [0, 1, 2, 3];
 
-// Inline "handwritten" dropdown that sits inside a sentence. The Select is
-// rendered as a coloured pill with a cursive font so the choices read as if
-// they were scribbled into the gaps of a story.
+// Inline dropdown that sits inside a sentence. The Select is rendered as a
+// rough.js sketched pill — but the text itself uses the body font (Roboto)
+// to match the rest of the visualiser, with the orange ink + bold weight
+// keeping it visually distinct as a pickable choice.
 const HANDWRITTEN_COLOR = "#c2410c";  // warm rust orange
-const HANDWRITTEN_FONT = '"Caveat", "Patrick Hand", "Comic Sans MS", cursive';
+const INLINE_FONT = "Roboto, sans-serif";
 
 // Select sx — drops the CSS border / background / radius; the visible "pill"
 // is drawn as a rough.js sketched rectangle behind the Select (see
 // InlineSelect below). Keeps the cursive font + orange ink + chevron colour.
 const inlineSelectSx = {
-  fontFamily: HANDWRITTEN_FONT,
-  fontSize: "1.45rem",
-  lineHeight: 1,
+  fontFamily: INLINE_FONT,
+  fontSize: "1rem",
+  lineHeight: 1.2,
   color: HANDWRITTEN_COLOR,
   fontWeight: 700,
   backgroundColor: "transparent",
@@ -158,8 +159,8 @@ function InlineSelect<T extends string | number>({
           PaperProps: {
             sx: {
               "& .MuiMenuItem-root": {
-                fontFamily: HANDWRITTEN_FONT,
-                fontSize: "1.2rem",
+                fontFamily: INLINE_FONT,
+                fontSize: "1rem",
                 color: HANDWRITTEN_COLOR,
               },
             },
@@ -279,8 +280,8 @@ function InlineCombo({
           width: width ?? 120,
           "& .MuiInputBase-root": {
             padding: "0 1.6rem 0 0.55rem !important",
-            fontFamily: HANDWRITTEN_FONT,
-            fontSize: "1.45rem",
+            fontFamily: INLINE_FONT,
+            fontSize: "1rem",
             color: HANDWRITTEN_COLOR,
             fontWeight: 700,
             backgroundColor: "transparent",
@@ -292,11 +293,11 @@ function InlineCombo({
         }}
         ListboxProps={{
           sx: {
-            fontFamily: HANDWRITTEN_FONT,
+            fontFamily: INLINE_FONT,
             color: HANDWRITTEN_COLOR,
             "& .MuiAutocomplete-option": {
-              fontFamily: HANDWRITTEN_FONT,
-              fontSize: "1.2rem",
+              fontFamily: INLINE_FONT,
+              fontSize: "1rem",
               color: HANDWRITTEN_COLOR,
             },
           },
@@ -421,7 +422,10 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     .filter((c) => c !== "no_car")
     .map((c) => ({
       value: c,
-      label: VEHICLE_CLASS_CHOICE_LABELS[c].toLowerCase(),
+      // Canonical casing — "Hatchback / Sedan / SUV". (Was lowercased while
+      // the dropdowns used a cursive scribble font; with Roboto that turned
+      // "SUV" into "suv", which reads as a typo.)
+      label: VEHICLE_CLASS_CHOICE_LABELS[c],
     }));
   // Variant labels: "average new" / "average used" stay lower-case to read
   // as inline scribble; "BYD" is a brand name and stays uppercase.
