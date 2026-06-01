@@ -843,9 +843,9 @@ const ChartFooter: React.FC<{
     if (category === "Space Heating") {
       solarLine = (
         <>
-          Solar self-consumption ({scenLabel}): the air conditioner bundles{" "}
-          {pct(frac.spaceHeating)} of heating + {pct(frac.spaceCooling)} of
-          cooling kWh met by rooftop solar. Resistive heaters: {pct(frac.spaceHeating)}.
+          Solar self-consumption ({scenLabel}): {pct(frac.spaceHeating)} of
+          heating kWh met by rooftop solar (heat pump and resistive). Cooling
+          is excluded from this chart so heating is compared like-for-like.
         </>
       );
     } else if (category === "Water Heating") {

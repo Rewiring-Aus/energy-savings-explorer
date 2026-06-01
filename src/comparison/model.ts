@@ -611,8 +611,11 @@ function getElecSupplyShare(
   drivingLevel: DrivingLevel,
 ): number {
   const occScale = getScalingFactor(occupants);
-  const heating = (energy("Space Heating", "Electric heat pump", state) +
-                   energy("Space Cooling", "Heat pump", state)) * occScale;
+  // Chart 2 treats Space Heating as heating-only (cooling is shown only in
+  // chart 1). The cooling load still exists on the meter, so it stays in the
+  // denominator — but it isn't attributed to the Space Heating bucket.
+  const heating = energy("Space Heating", "Electric heat pump", state) * occScale;
+  const cooling = energy("Space Cooling", "Heat pump",          state) * occScale;
   const water   = energy("Water Heating", "Electric heat pump", state) * occScale;
   const cooktop = energy("Cooktop",       "Electric induction", state) * occScale;
   const other   = OTHER_ELEC_KWH_DAY[state] * occScale;
@@ -623,7 +626,7 @@ function getElecSupplyShare(
     0,
   );
 
-  let total = heating + water + cooktop + other;
+  let total = heating + cooling + water + cooktop + other;
   if (includeVehicles) total += vehicle;
 
   let thisUse = 0;
@@ -688,8 +691,11 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
   const vClass = primary?.vClass ?? vehicleClassFromOption(primaryOption);
 
   // --- Energy (kWh/day) ---
+  // Chart 2 compares appliances like-for-like: Space Heating is heating-only
+  // (no cooling bundled into the heat pump path), so gas vs heat pump is a
+  // fair heating-vs-heating comparison. Cooling is still counted in chart 1's
+  // whole-house totals.
   let energyKwhDay = 0;
-  let coolingKwhDay = 0; // separate so we can apply cooling's solar fraction
   if (category === "Vehicles") {
     if (householdEntries.length === 0) {
       // Household is set to "No car"; show zero so the savings box can prompt
@@ -702,11 +708,6 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
     energyKwhDay = (wh * kmPerDay(state, drivingLevel)) / 1000 * SINGLE_OPTION_VEHICLE_COUNT;
   } else {
     energyKwhDay = energy(category, option.value, state) * occScale * dwScale;
-    if (category === "Space Heating" && option.value === "Electric heat pump") {
-      // Heat pump AC provides cooling too — add the cooling load
-      coolingKwhDay = energy("Space Cooling", "Heat pump", state) * occScale * dwScale;
-      energyKwhDay += coolingKwhDay;
-    }
   }
 
   // --- EV fast-charge split (R FAST_CHARGE_FRACTION) ---
@@ -730,10 +731,7 @@ export function evaluateSingleOption(base: HouseInputs, single: SingleOptionInpu
   let solarKwhDay = 0;
   if (option.fuel === "electricity") {
     const frac = SOLAR_FRACTION_BY_SCENARIO[solarScenario];
-    if (category === "Space Heating" && option.value === "Electric heat pump") {
-      const heatingOnly = energyKwhDay - coolingKwhDay;
-      solarKwhDay = heatingOnly * frac.spaceHeating + coolingKwhDay * frac.spaceCooling;
-    } else if (category === "Space Heating") {
+    if (category === "Space Heating") {
       solarKwhDay = energyKwhDay * frac.spaceHeating;
     } else if (category === "Water Heating") {
       // Electric resistance hot water has a narrower solar overlap than
