@@ -894,23 +894,33 @@ interface SolarBatteryInputs {
   includeCapex: boolean;
 }
 
+// Two consumption profiles flow through the solar+battery chart:
+//   "electric" — fully electrified household (default; used everywhere else)
+//   "gas"      — gas heating + gas water + gas cooktop + petrol vehicles, so
+//                only cooling + other electric appliances draw from the grid
+export type HouseType = "electric" | "gas";
+
 // Helper: per-state household-level self-sufficiency for the chosen scenario.
 // Mirrors get_household_self_sufficiency() in R — total solar kWh met / total
 // electric load kWh, weighted across appliances + home-charged EV kWh. Public
 // DC fast-charge kWh leave the home meter, so they don't pass through solar.
-function householdSelfSufficiency(inputs: HouseInputs) {
+function householdSelfSufficiency(inputs: HouseInputs, houseType: HouseType = "electric") {
   const { state, occupants, dwelling, solarScenario, drivingLevel } = inputs;
   const occScale = getScalingFactor(occupants);
   const dwScale = dwelling === "apartment" ? APARTMENT_ENERGY_FACTOR : 1;
   const entries = vehicleEntries(inputs);
 
-  const heating  = energy("Space Heating", "Electric heat pump", state) * occScale * dwScale;
+  // Heating / water / cooktop draw electricity only in the electric home.
+  // Cooling and the "other" appliance bucket stay electric in both profiles.
+  const isGas = houseType === "gas";
+  const heating  = isGas ? 0 : energy("Space Heating", "Electric heat pump", state) * occScale * dwScale;
   const cooling  = energy("Space Cooling", "Heat pump",          state) * occScale * dwScale;
-  const water    = energy("Water Heating", "Electric heat pump", state) * occScale * dwScale;
-  const cooktop  = energy("Cooktop",       "Electric induction", state) * occScale * dwScale;
+  const water    = isGas ? 0 : energy("Water Heating", "Electric heat pump", state) * occScale * dwScale;
+  const cooktop  = isGas ? 0 : energy("Cooktop",       "Electric induction", state) * occScale * dwScale;
   const other    = OTHER_ELEC_KWH_DAY[state] * occScale * dwScale;
   const km = kmPerDay(state, drivingLevel);
-  const evDaily  = entries.reduce(
+  // Petrol vehicles in the gas profile — no home charging draw.
+  const evDaily  = isGas ? 0 : entries.reduce(
     (sum, e) => sum + (VEHICLE_EFFICIENCY_WH_KM[e.vClass].electric * km) / 1000
                       * (1 - FAST_CHARGE_FRACTION) * e.weight,
     0,
@@ -1161,6 +1171,7 @@ function annualBatteryFlows(
   solarKw: number,
   batteryKwh: number,
   years: number,
+  houseType: HouseType = "electric",
 ): AnnualSolarBatteryFlows {
   const emptySeasonal: Record<Season, number> = { summer: 0, autumn: 0, winter: 0, spring: 0 };
   const empty: AnnualSolarBatteryFlows = {
@@ -1170,7 +1181,7 @@ function annualBatteryFlows(
   };
   if (solarKw <= 0) return empty;
   const dailySolarKwh = getSolarDailyKwhPerKw(inputs.state, inputs.postcode) * solarKw;
-  const breakdown = householdSelfSufficiency(inputs);
+  const breakdown = householdSelfSufficiency(inputs, houseType);
   const dailyConsumptionKwh = breakdown.applianceLoad + breakdown.vehicleLoad;
   if (dailyConsumptionKwh === 0) return empty;
 
@@ -1281,12 +1292,13 @@ export function evaluateSolarBatteryBreakdown(
   base: HouseInputs,
   sb: SolarBatteryInputs,
   mode: BatteryValueMode = base.batteryValue,
+  houseType: HouseType = "electric",
 ): SolarBatteryCost {
   const { state, period } = base;
   const { solarKw, batteryKwh, includeCapex } = sb;
   const years = period === "1year" ? 1 : 15;
 
-  const flows = annualBatteryFlows(base, solarKw, batteryKwh, years);
+  const flows = annualBatteryFlows(base, solarKw, batteryKwh, years, houseType);
 
   // Retail electricity price (the same one chart 1 charges for grid kWh).
   const elecPrice = priceFor(state, "electricity", period);

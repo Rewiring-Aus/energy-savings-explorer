@@ -23,6 +23,7 @@ import {
   solarBatteryCapex,
   solarBatteryEnergyFlows,
 } from "src/comparison/model";
+import type { HouseType } from "src/comparison/model";
 import {
   BATTERY_KWH_OPTIONS,
   BatterySizeKwh,
@@ -120,11 +121,10 @@ function findOption(category: ApplianceCategory, value: string): ApplianceOption
 // Display rounding tiered to keep small numbers legible without implying
 // false precision on big ones:
 //   |n| < $250  → nearest $10  (so a $187 cooktop bill doesn't snap to $200)
-//   |n| < $500  → nearest $50
-//   otherwise  → nearest $100
+//   otherwise  → nearest $50
 function roundForDisplay(n: number): number {
   const abs = Math.abs(n);
-  const step = abs < 250 ? 10 : abs < 500 ? 50 : 100;
+  const step = abs < 250 ? 10 : 50;
   return Math.round(n / step) * step;
 }
 
@@ -326,7 +326,7 @@ const BATTERY_VALUE_MODES: BatteryValueMode[] = ["self_consume", "vpp", "wholesa
 
 function sbRoundForDisplay(n: number): number {
   const abs = Math.abs(n);
-  const step = abs < 250 ? 10 : abs < 500 ? 50 : 100;
+  const step = abs < 250 ? 10 : 50;
   return Math.round(n / step) * step;
 }
 
@@ -349,9 +349,10 @@ interface SbSegment {
 const SbBar: React.FC<{
   breakdown: SolarBatteryCost;
   modeLabel: string;
+  modeSublabel?: string;  // small line under the title — used by the gas/petrol bar to name its mode
   maxPx: number;       // px height available for the bar
   scale: number;       // $/px
-}> = ({ breakdown, modeLabel, maxPx, scale }) => {
+}> = ({ breakdown, modeLabel, modeSublabel, maxPx, scale }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [width, setWidth] = useState(0);
@@ -471,6 +472,13 @@ const SbBar: React.FC<{
       <Typography variant="h5" sx={{ m: 0, textAlign: "center", fontSize: "0.95rem" }}>
         {modeLabel}
       </Typography>
+      {modeSublabel && (
+        <Typography
+          sx={{ m: 0, textAlign: "center", fontSize: "0.72rem", color: "#666", lineHeight: 1.2, mt: -0.5 }}
+        >
+          {modeSublabel}
+        </Typography>
+      )}
       <Typography
         sx={{ m: 0, textAlign: "center", fontSize: "1.25rem", fontWeight: 700, color: "#1b5e20" }}
       >
@@ -536,9 +544,14 @@ function annuityPayment(principal: number, rate: number, termYears: number): num
   return monthly * 12;
 }
 
-// Chart 2 — three savings-only bars, one per battery export mode. The
-// system's upfront cost is identical across modes so it's stated once in
-// the header rather than repeated in each bar.
+// Chart 2 — three savings-only bars (one per battery export mode for the
+// all-electric home), plus a fourth bar showing what the same solar+battery
+// system would save a household still running gas heating / hot water /
+// cooktop and petrol cars. The 4th bar uses whichever export mode the user
+// has selected on the main household toggle so the comparison stays
+// like-for-like with whichever bar they're focused on.
+// The system's upfront cost is identical across all four bars so it's
+// stated once in the header rather than repeated in each bar.
 const SolarBatteryChart: React.FC<{
   baseInputs: HouseInputs;
   solarKw: SolarSizeKw;
@@ -552,12 +565,30 @@ const SolarBatteryChart: React.FC<{
     period: baseInputs.period,
     includeCapex: true,
   };
-  const breakdowns = BATTERY_VALUE_MODES.map((m) => ({
-    mode: m,
-    breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, m),
-  }));
+  interface BarEntry {
+    key: string;
+    label: string;
+    sublabel?: string;
+    breakdown: SolarBatteryCost;
+    houseType: HouseType;
+  }
+  const breakdowns: BarEntry[] = [
+    {
+      key: `gas-${baseInputs.batteryValue}`,
+      label: "Gas/petrol home",
+      sublabel: BATTERY_VALUE_LABEL[baseInputs.batteryValue],
+      breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, baseInputs.batteryValue, "gas"),
+      houseType: "gas" as const,
+    },
+    ...BATTERY_VALUE_MODES.map((m) => ({
+      key: `electric-${m}`,
+      label: BATTERY_VALUE_LABEL[m],
+      breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, m, "electric"),
+      houseType: "electric" as const,
+    })),
+  ];
 
-  // Single capex figure — identical across the three modes.
+  // Single capex figure — identical across all bars.
   const totalCapex = solarBatteryCapex(baseInputs.state, solarKw, batteryKwh, years);
 
   // Finance summary (only shown when Finance = Loan)
@@ -583,14 +614,15 @@ const SolarBatteryChart: React.FC<{
       </Typography>
 
       <Typography variant="caption" sx={{ display: "block", textAlign: "center", color: "#555", mb: 1 }}>
-        Savings over {years === 1 ? "1 year" : `${years} years`} by battery export mode
+        Savings over {years === 1 ? "1 year" : `${years} years`} — gas/petrol home for comparison + all-electric home by export mode
       </Typography>
       <Box sx={{ display: "flex", gap: { xs: 1, sm: 2 }, justifyContent: "center", alignItems: "flex-end", mt: 2 }}>
-        {breakdowns.map(({ mode, breakdown }) => (
+        {breakdowns.map((entry) => (
           <SbBar
-            key={mode}
-            modeLabel={BATTERY_VALUE_LABEL[mode]}
-            breakdown={breakdown}
+            key={entry.key}
+            modeLabel={entry.label}
+            modeSublabel={entry.sublabel}
+            breakdown={entry.breakdown}
             maxPx={BAR_PX}
             scale={scale}
           />

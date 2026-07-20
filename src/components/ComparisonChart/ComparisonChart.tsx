@@ -46,11 +46,10 @@ const ORDER: SegmentKey[] = ["capital", "interest", "gas", "petrol", "electricit
 // Display rounding tiered to keep small numbers legible without implying
 // false precision on big ones:
 //   |n| < $250  → nearest $10  (so a $187 cooktop bill doesn't snap to $200)
-//   |n| < $500  → nearest $50
-//   otherwise  → nearest $100
+//   otherwise  → nearest $50
 function roundForDisplay(n: number): number {
   const abs = Math.abs(n);
-  const step = abs < 250 ? 10 : abs < 500 ? 50 : 100;
+  const step = abs < 250 ? 10 : 50;
   return Math.round(n / step) * step;
 }
 
