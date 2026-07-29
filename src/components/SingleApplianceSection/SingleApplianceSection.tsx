@@ -6,15 +6,20 @@ import {
   Typography,
 } from "@mui/material";
 import rough from "roughjs";
-import ComparisonChart, { ChartBar } from "src/components/ComparisonChart/ComparisonChart";
+import { assumptionsLine, householdLine } from "src/comparison/summary";
+import ChartExport from "src/components/ChartExport/ChartExport";
+import ChartLogo from "src/components/ChartLogo/ChartLogo";
+import ComparisonChart, { ChartBar, SavingsCallout } from "src/components/ComparisonChart/ComparisonChart";
+import { RA } from "src/theme/palette";
 import {
   ApplianceCategory,
   ApplianceOption,
   APPLIANCE_OPTIONS,
-  BatteryValueMode,
+  getTariffSpec,
   HouseInputs,
   Period,
   SolarScenario,
+  wholeHomePreset,
   SolarBatteryCost,
   SOLAR_FRACTION_BY_SCENARIO,
   availableOptions,
@@ -27,7 +32,6 @@ import type { HouseType } from "src/comparison/model";
 import {
   BATTERY_KWH_OPTIONS,
   BatterySizeKwh,
-  EV_DEDICATED_DOL_KWH,
   FAST_CHARGE_FRACTION,
   FIT_BY_STATE,
   Fuel,
@@ -36,7 +40,7 @@ import {
   SOLAR_LCOE_BY_STATE,
   SolarSizeKw,
   StateCode,
-  VPP_ANNUAL_BENEFIT,
+  TARIFF_LABELS,
 } from "src/comparison/data";
 
 interface Props {
@@ -48,12 +52,19 @@ interface Props {
 // option machinery.
 type Category = ApplianceCategory | "Solar+Battery";
 
+// The solar + battery comparison is hidden pending further work on the dispatch
+// model. Flip this to true to bring the tab back — SolarBatteryChart and its
+// evaluators are left fully wired up, only the entry point is withheld.
+const SHOW_SOLAR_BATTERY = false;
+
 const CATEGORIES: { value: Category; label: string }[] = [
   { value: "Space Heating",  label: "Space heating" },
   { value: "Water Heating",  label: "Water heating" },
   { value: "Cooktop",        label: "Cooktop" },
   { value: "Vehicles",       label: "Vehicle" },
-  { value: "Solar+Battery",  label: "Solar + battery" },
+  ...(SHOW_SOLAR_BATTERY
+    ? [{ value: "Solar+Battery" as Category, label: "Solar + battery" }]
+    : []),
 ];
 
 // "Efficient electric" option per category — the savings box compares each
@@ -67,25 +78,7 @@ function efficientElectricValue(category: ApplianceCategory): string {
   }
 }
 
-// Display name for the efficient electric option, used in the savings headline
-// (e.g. "Heat pump savings vs gas hot water"). Kept short on purpose.
-const ELECTRIC_LABEL: Record<ApplianceCategory, string> = {
-  "Space Heating": "Air conditioner",
-  "Water Heating": "Heat pump",
-  "Cooktop":       "Induction",
-  "Vehicles":      "EV",
-};
-
-// Noun used to describe the appliance/use in the savings headline, lower-case
-// so it composes cleanly after the fossil label.
-const CATEGORY_NOUN: Record<ApplianceCategory, string> = {
-  "Space Heating": "heating",
-  "Water Heating": "hot water",
-  "Cooktop":       "cooktop",
-  "Vehicles":      "car",
-};
-
-// Pretty label for each solar scenario, used by the chip in the savings box.
+// Pretty label for each solar scenario, used in the chart footer captions.
 const SCENARIO_LABEL: Record<SolarScenario, string> = {
   grid_only:       "Grid only",
   solar:           "Solar",
@@ -128,13 +121,6 @@ function roundForDisplay(n: number): number {
   return Math.round(n / step) * step;
 }
 
-function formatMoney(n: number): string {
-  return new Intl.NumberFormat("en-AU", {
-    style: "currency",
-    currency: "AUD",
-    maximumFractionDigits: 0,
-  }).format(roundForDisplay(n));
-}
 
 const groupSx = {
   flexWrap: "wrap",
@@ -172,157 +158,74 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
 
 interface SavingsLine {
   fossilLabel: string;  // e.g. "gas", "LPG", "petrol"
+  fossilValue: string;  // energy-CSV key, e.g. "Natural gas" — locates the bar
   value: number;        // fossil − electric (positive = electric saves money)
 }
 
-// Small chip (top-right of the green box) that names which solar scenario
-// these figures reflect. Without it the box reads as if the savings are
-// universal, which is misleading once a user has changed Scenario.
-const ScenarioChip: React.FC<{ scenario: SolarScenario }> = ({ scenario }) => (
+// Shown in place of the savings callout when the household has no car, so the
+// Vehicle view explains why the bars are empty rather than just showing zeros.
+const NoCarNote: React.FC = () => (
   <Box
     sx={{
-      flex: "0 0 auto",
-      padding: "0.15rem 0.5rem",
-      backgroundColor: "#fff",
-      border: "1px solid #2e7d32",
-      borderRadius: "999px",
-      fontSize: "0.7rem",
-      fontWeight: 600,
-      color: "#1b5e20",
-      whiteSpace: "nowrap",
-      lineHeight: 1.4,
+      flex: { xs: "1 1 100%", md: "0 0 260px" },
+      padding: "1rem",
+      backgroundColor: "#f5f4ee",
+      border: "1px solid #d7d5cd",
+      borderRadius: 2,
+      alignSelf: "flex-start",
     }}
   >
-    {SCENARIO_LABEL[scenario]}
+    <Typography variant="overline" sx={{ display: "block", lineHeight: 1.2 }}>
+      Savings
+    </Typography>
+    <Typography variant="body2" sx={{ mt: 1, color: "#666" }}>
+      Pick a vehicle in Household settings to see savings.
+    </Typography>
   </Box>
 );
 
-const SavingsBox: React.FC<{
-  category: ApplianceCategory;
-  lines: SavingsLine[];
-  noCar: boolean;
-  years: number;
-  scenario: SolarScenario;
-}> = ({ category, lines, noCar, years, scenario }) => {
-  if (category === "Vehicles" && noCar) {
-    return (
-      <Box
-        sx={{
-          flex: { xs: "1 1 100%", md: "0 0 260px" },
-          padding: "1rem",
-          backgroundColor: "#f5f4ee",
-          border: "1px solid #d7d5cd",
-          borderRadius: 2,
-          alignSelf: "flex-start",
-        }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, justifyContent: "space-between" }}>
-          <Typography variant="overline" sx={{ display: "block", lineHeight: 1.2 }}>
-            Savings
-          </Typography>
-          <ScenarioChip scenario={scenario} />
-        </Box>
-        <Typography variant="body2" sx={{ mt: 1, color: "#666" }}>
-          Pick a vehicle in Household settings to see savings.
-        </Typography>
-      </Box>
-    );
-  }
-
-  const electricLabel = ELECTRIC_LABEL[category];
-  const noun = CATEGORY_NOUN[category];
-
-  return (
-    <Box
-      sx={{
-        flex: { xs: "1 1 100%", md: "0 0 260px" },
-        padding: "1rem",
-        backgroundColor: "#e8f5e9",
-        border: "2px solid #2e7d32",
-        borderRadius: 2,
-        alignSelf: "flex-start",
-      }}
-    >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, justifyContent: "space-between" }}>
-        <Typography
-          variant="overline"
-          sx={{ lineHeight: 1.2, color: "#1b5e20" }}
-        >
-          Savings
-        </Typography>
-        <ScenarioChip scenario={scenario} />
-      </Box>
-      {lines.map((line) => {
-        const positive = line.value > 0;
-        const fg = positive ? "#1b5e20" : "#b71c1c";
-        const verb = positive ? "savings" : "extra cost";
-        return (
-          <Box key={line.fossilLabel} sx={{ mt: 1 }}>
-            <Typography variant="caption" sx={{ display: "block", color: fg }}>
-              {electricLabel} {verb} vs {line.fossilLabel} {noun}
-              {years > 1 ? ` over ${years} years` : ""}
-            </Typography>
-            <Typography
-              sx={{ fontSize: "1.6rem", fontWeight: 700, lineHeight: 1.1, color: fg }}
-            >
-              {formatMoney(Math.abs(line.value))}
-            </Typography>
-            {years > 1 && (
-              <Typography sx={{ fontSize: "0.75rem", color: fg, lineHeight: 1.2 }}>
-                {formatMoney(Math.abs(line.value) / years)} / year average
-              </Typography>
-            )}
-          </Box>
-        );
-      })}
-    </Box>
-  );
-};
-
-// Pretty label for the battery export mode shown in the savings chip.
-const BATTERY_VALUE_LABEL: Record<BatteryValueMode, string> = {
-  self_consume: "Self-consume",
-  vpp: "VPP",
-  wholesale: "Wholesale",
-};
-
-// Chart 2 segment keys — savings only. Capex is summarised separately above
-// the chart since it's identical across all three bars.
+// Solar+battery segment keys — savings only. Capex is summarised separately
+// above the chart since it's identical across bars.
 type SbSegmentKey =
   | "solarToHome"
   | "solarExport"
   | "batteryToHome"
-  | "batteryToGrid"
-  | "vppBonus";
+  | "batteryToEv"
+  | "batteryToGrid";
 
+// Brand palette only. The two flows OUT to the grid take the neutrals (grey,
+// navy); the flows that stay on-site and displace a bill take the saturated
+// hues (yellow for solar direct, green for battery→home, purple for battery→car).
+//
+// Teal is deliberately absent: against RA green it separates by only ΔE 11.4 for
+// normal vision, below the hard floor of 15, so the two could not be told apart.
+// Separation verified on ALL pairs: worst ΔE 17.1 protan / 9.9 tritan, 22.1 normal.
 const SB_SEGMENT_COLORS: Record<SbSegmentKey, string> = {
-  solarToHome:   "#F0CF61",  // yellow     — solar self-consumption (retail saved)
-  solarExport:   "#E58E26",  // amber      — daytime FiT export
-  batteryToHome: "#2e7d32",  // green      — battery → home (retail saved)
-  batteryToGrid: "#1976d2",  // blue       — battery → grid (FiT or wholesale)
-  vppBonus:      "#7B1FA2",  // purple     — flat VPP membership benefit
+  solarToHome:   RA.yellow,  // solar self-consumption (imports saved)
+  solarExport:   RA.gray,    // daytime FiT export
+  batteryToHome: RA.green,   // battery → home (imports saved)
+  batteryToEv:   RA.purple,  // battery → car (charging saved)
+  batteryToGrid: RA.navy,    // battery → grid (evening export)
 };
 
 const SB_SEGMENT_LABELS: Record<SbSegmentKey, string> = {
-  solarToHome:   "Solar → home (retail saved)",
+  solarToHome:   "Solar → home (imports saved)",
   solarExport:   "Solar → grid (FiT)",
-  batteryToHome: "Battery → home (retail saved)",
-  batteryToGrid: "Battery → grid",
-  vppBonus:      "VPP membership",
+  batteryToHome: "Battery → home (imports saved)",
+  batteryToEv:   "Battery → car (charging saved)",
+  batteryToGrid: "Battery → grid (evening export)",
 };
 
 // Stable hachure seeds (rough.js needs a fixed seed per fill so paint stays
 // stable between renders).
 const SB_SEGMENT_SEED: Record<SbSegmentKey, number> = {
   solarToHome: 41, solarExport: 67,
-  batteryToHome: 89, batteryToGrid: 103, vppBonus: 137,
+  batteryToHome: 89, batteryToEv: 137, batteryToGrid: 103,
 };
 
 const SAVINGS_KEYS: SbSegmentKey[] = [
-  "solarToHome", "solarExport", "batteryToHome", "batteryToGrid", "vppBonus",
+  "solarToHome", "solarExport", "batteryToHome", "batteryToEv", "batteryToGrid",
 ];
-
-const BATTERY_VALUE_MODES: BatteryValueMode[] = ["self_consume", "vpp", "wholesale"];
 
 function sbRoundForDisplay(n: number): number {
   const abs = Math.abs(n);
@@ -369,7 +272,7 @@ const SbBar: React.FC<{
 
   const totalSavings =
     breakdown.solarToHome + breakdown.solarExport +
-    breakdown.batteryToHome + breakdown.batteryToGrid + breakdown.vppBonus;
+    breakdown.batteryToHome + breakdown.batteryToEv + breakdown.batteryToGrid;
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -544,21 +447,26 @@ function annuityPayment(principal: number, rate: number, termYears: number): num
   return monthly * 12;
 }
 
-// Chart 2 — three savings-only bars (one per battery export mode for the
-// all-electric home), plus a fourth bar showing what the same solar+battery
-// system would save a household still running gas heating / hot water /
-// cooktop and petrol cars. The 4th bar uses whichever export mode the user
-// has selected on the main household toggle so the comparison stays
-// like-for-like with whichever bar they're focused on.
-// The system's upfront cost is identical across all four bars so it's
-// stated once in the header rather than repeated in each bar.
+// Solar + battery view — two savings-only bars: what the same system saves an
+// all-electric home, and what it saves a household still running gas heating /
+// hot water / cooktop and petrol cars. Both are priced at the household's
+// selected tariff.
+//
+// This used to be four bars, one per battery-export mode. The modes are gone:
+// how exports are valued is now a property of the tariff (Amber settles the
+// evening window at wholesale, every other plan at the flat feed-in tariff), so
+// there is no longer an independent knob to compare across.
+// The system's upfront cost is identical across both bars so it's stated once
+// in the header rather than repeated in each bar.
 const SolarBatteryChart: React.FC<{
   baseInputs: HouseInputs;
   solarKw: SolarSizeKw;
   batteryKwh: BatterySizeKwh;
   title: string;
+  subtitle?: string;
   footer?: React.ReactNode;
-}> = ({ baseInputs, solarKw, batteryKwh, title, footer }) => {
+}> = ({ baseInputs, solarKw, batteryKwh, title, subtitle, footer }) => {
+  const cardRef = useRef<HTMLDivElement | null>(null);
   const years = baseInputs.period === "1year" ? 1 : 15;
   const sb = {
     solarKw, batteryKwh,
@@ -572,20 +480,27 @@ const SolarBatteryChart: React.FC<{
     breakdown: SolarBatteryCost;
     houseType: HouseType;
   }
+  // Report the RESOLVED tariff — Solar Sharer falls back to time-of-use outside
+  // the states that offer it, and the bar sublabel is the only place that shows.
+  const resolvedTariff = getTariffSpec(
+    baseInputs.tariff, baseInputs.state, baseInputs.period,
+  ).tariff;
+  const tariffSublabel = TARIFF_LABELS[resolvedTariff];
   const breakdowns: BarEntry[] = [
     {
-      key: `gas-${baseInputs.batteryValue}`,
+      key: "gas",
       label: "Gas/petrol home",
-      sublabel: BATTERY_VALUE_LABEL[baseInputs.batteryValue],
-      breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, baseInputs.batteryValue, "gas"),
+      sublabel: tariffSublabel,
+      breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, "gas"),
       houseType: "gas" as const,
     },
-    ...BATTERY_VALUE_MODES.map((m) => ({
-      key: `electric-${m}`,
-      label: BATTERY_VALUE_LABEL[m],
-      breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, m, "electric"),
+    {
+      key: "electric",
+      label: "All-electric home",
+      sublabel: tariffSublabel,
+      breakdown: evaluateSolarBatteryBreakdown(baseInputs, sb, "electric"),
       houseType: "electric" as const,
-    })),
+    },
   ];
 
   // Single capex figure — identical across all bars.
@@ -601,20 +516,36 @@ const SolarBatteryChart: React.FC<{
   const maxSavings = Math.max(
     ...breakdowns.map((b) =>
       b.breakdown.solarToHome + b.breakdown.solarExport +
-      b.breakdown.batteryToHome + b.breakdown.batteryToGrid + b.breakdown.vppBonus,
+      b.breakdown.batteryToHome + b.breakdown.batteryToEv + b.breakdown.batteryToGrid,
     ),
     1,
   );
   const scale = maxSavings / BAR_PX;
 
   return (
-    <Box sx={{ padding: "1.5rem", backgroundColor: "#fff", border: "1px solid #d7d5cd", borderRadius: 1 }}>
-      <Typography variant="h2" sx={{ textAlign: "center", mt: 0, mb: 0.5 }}>
+    <Box
+      ref={cardRef}
+      sx={{ position: "relative", padding: "1.5rem", backgroundColor: "#fff", border: "1px solid #d7d5cd", borderRadius: 1 }}
+    >
+      <ChartExport
+        targetRef={cardRef}
+        filename={subtitle ? `${title} — ${subtitle}` : title}
+      />
+      <Typography variant="h2" sx={{ textAlign: "center", mt: 0, mb: 0 }}>
         {title}
       </Typography>
+      {subtitle && (
+        <Typography
+          variant="h3"
+          sx={{ textAlign: "center", mt: 0.25, mb: 0.5, fontWeight: 500, color: "#555" }}
+        >
+          {subtitle}
+        </Typography>
+      )}
 
       <Typography variant="caption" sx={{ display: "block", textAlign: "center", color: "#555", mb: 1 }}>
-        Savings over {years === 1 ? "1 year" : `${years} years`} — gas/petrol home for comparison + all-electric home by export mode
+        What the same system saves an all-electric home, next to a home still
+        running gas and petrol — both on the household's tariff.
       </Typography>
       <Box sx={{ display: "flex", gap: { xs: 1, sm: 2 }, justifyContent: "center", alignItems: "flex-end", mt: 2 }}>
         {breakdowns.map((entry) => (
@@ -630,7 +561,18 @@ const SolarBatteryChart: React.FC<{
       </Box>
       <SbLegend />
 
-      {footer}
+      {/* Captions left, brand mark right — both inside the exported card. */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 2,
+        }}
+      >
+        <Box sx={{ flex: 1, minWidth: 0 }}>{footer}</Box>
+        <ChartLogo />
+      </Box>
 
       {/* TEMPORARY DIAGNOSTIC: underlying energy flows per column.
           Same numeric flows feed all 3 columns; only the headroom row varies
@@ -791,22 +733,52 @@ const footerLineSx = {
   lineHeight: 1.5,
 };
 
+// Every chart card leads with the household it describes, so an exported PNG
+// still says which settings produced it once it's away from the control panel.
 const ChartFooter: React.FC<{
   category: Category;
   baseInputs: HouseInputs;
   solarKw: SolarSizeKw;
   batteryKwh: BatterySizeKwh;
+}> = (props) => {
+  // The solar/battery toggles above the chart only govern the Solar+Battery
+  // card. Every other category is costed against the household's own system,
+  // which is dwelling-dependent (apartments get a smaller one), so quote that
+  // preset rather than the toggle positions.
+  const system = props.category === "Solar+Battery"
+    ? { solarKw: props.solarKw, batteryKwh: props.batteryKwh }
+    : wholeHomePreset(props.baseInputs.dwelling);
+  return (
+    <>
+      <Box sx={{ mt: 1.5 }}>
+        <Typography variant="caption" sx={{ ...footerLineSx, fontWeight: 600, color: "#444" }}>
+          {householdLine(props.baseInputs)}
+        </Typography>
+        <Typography variant="caption" sx={footerLineSx}>
+          {assumptionsLine(props.baseInputs, system)}
+        </Typography>
+      </Box>
+      <ChartFooterDetail {...props} />
+    </>
+  );
+};
+
+const ChartFooterDetail: React.FC<{
+  category: Category;
+  baseInputs: HouseInputs;
+  solarKw: SolarSizeKw;
+  batteryKwh: BatterySizeKwh;
 }> = ({ category, baseInputs, solarKw, batteryKwh }) => {
-  const { state, solarScenario: scenario, period, evTariff } = baseInputs;
+  const { state, solarScenario: scenario, period } = baseInputs;
   const frac = SOLAR_FRACTION_BY_SCENARIO[scenario];
   const scenLabel = SCENARIO_LABEL[scenario].toLowerCase();
   const periodLabel = period === "1year"
     ? "today's prices"
     : "15-year forecast average";
+  const spec = getTariffSpec(baseInputs.tariff, state, period);
 
-  // ---- Solar+Battery: explain the three modes + retail/FiT ----
+  // ---- Solar+Battery: explain the dispatch order + the tariff's prices ----
   if (category === "Solar+Battery") {
-    const retail = periodPrice(state, "electricity", period);
     const fit = FIT_BY_STATE[state];
     return (
       <Box sx={{ mt: 1.5 }}>
@@ -816,15 +788,18 @@ const ChartFooter: React.FC<{
           battery sizing above.
         </Typography>
         <Typography variant="caption" sx={footerLineSx}>
-          Battery export modes — <strong>Self-consume</strong>: headroom rolls
-          into the next day (no grid export); <strong>VPP</strong>: flat
-          ${VPP_ANNUAL_BENEFIT}/yr membership benefit; <strong>Wholesale</strong>:
-          headroom valued at the tiered seasonal 4–8 pm evening-peak schedule
-          (per-hour cap = inverter size).
+          Stored solar is dispatched in strict priority — first to house load the
+          daytime solar didn't reach, then to the car (capped at its unmet
+          charging), and the remainder is exported in the evening.{" "}
+          {spec.exportEvening === "wholesale_peak"
+            ? "On this tariff the evening export settles at the tiered seasonal 4–8 pm wholesale schedule (per-hour cap = inverter size), floored at the feed-in tariff."
+            : "On this tariff the evening export earns the flat feed-in tariff."}
         </Typography>
         <Typography variant="caption" sx={footerLineSx}>
-          Tariffs ({periodLabel}): retail electricity {centsKwh(retail?.kwh)},
-          feed-in tariff {centsKwh(fit)}.
+          Prices ({periodLabel}): grid imports {centsKwh(spec.importDolKwh)},
+          feed-in tariff {centsKwh(fit)}, daily supply charge $
+          {spec.dailyCharge.toFixed(2)}
+          {spec.freeWindow && " (this plan's higher standing charge buys the free 11am–2pm window)"}.
         </Typography>
       </Box>
     );
@@ -834,11 +809,8 @@ const ChartFooter: React.FC<{
   if (category === "Vehicles") {
     const petrol = periodPrice(state, "petrol", period);
     const diesel = periodPrice(state, "diesel", period);
-    const offPeak = periodPrice(state, "electricity_off_peak", period);
     const fast = periodPrice(state, "ev_fast_charge", period);
-    const evTariffLabel = evTariff === "ev"
-      ? `dedicated EV plan ${centsKwh(EV_DEDICATED_DOL_KWH)}`
-      : `off-peak retail ${centsKwh(offPeak?.kwh)}`;
+    const evTariffLabel = `${TARIFF_LABELS[spec.tariff]} at ${centsKwh(spec.evDolKwh)}`;
     return (
       <Box sx={{ mt: 1.5 }}>
         {scenario !== "grid_only" && (
@@ -867,7 +839,6 @@ const ChartFooter: React.FC<{
   // ---- Space Heating / Water Heating / Cooktop ----
   const gas = periodPrice(state, "gas", period);
   const lpg = periodPrice(state, "lpg", period);
-  const elec = periodPrice(state, "electricity", period);
   const lcoe = SOLAR_LCOE_BY_STATE[state];
 
   let solarLine: React.ReactNode = null;
@@ -902,7 +873,15 @@ const ChartFooter: React.FC<{
   const tariffParts: string[] = [];
   if (gas) tariffParts.push(`gas ${centsKwh(gas.kwh)}${dailyFee(gas.daily)}`);
   if (lpg) tariffParts.push(`LPG ${centsKwh(lpg.kwh)}${dailyFee(lpg.daily)}`);
-  if (elec) tariffParts.push(`electricity ${centsKwh(elec.kwh)}${dailyFee(elec.daily)}`);
+  // Electricity is priced off the resolved TARIFF, not the flat "electricity"
+  // row — quoting the flat row here would contradict what the bars actually
+  // charge (e.g. Solar Sharer bills 33.0¢ + $2.30/day, not 39.8¢ + $1.56/day).
+  tariffParts.push(
+    `electricity ${centsKwh(spec.importDolKwh)}${dailyFee(spec.dailyCharge)} on ${TARIFF_LABELS[spec.tariff]}`,
+  );
+  if (spec.freeWindow) {
+    tariffParts.push("free 11am–2pm (capped at 24 kWh/day household-wide)");
+  }
   if (scenario !== "grid_only") {
     tariffParts.push(`self-consumed solar ${centsKwh(lcoe)} (LCOE)`);
   }
@@ -992,17 +971,52 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
         period,
         includeCapex: true,
       }).total);
-      lines.push({ fossilLabel: f.label, value: fossilCost - electricCost });
+      lines.push({
+        fossilLabel: f.label,
+        fossilValue: f.value,
+        value: fossilCost - electricCost,
+      });
     }
     return lines;
   }, [isSolarBattery, category, baseInputs, period, options]);
 
-  const costViewLabel = isOneYear
-    ? "Operating cost (current prices)"
-    : includeCapex ? "Total cost" : "Running cost only";
-  const title = isSolarBattery
-    ? `Battery — savings by export mode`
-    : `${costViewLabel} — ${category.toLowerCase()} options (${years} year${years === 1 ? "" : "s"})`;
+  // Savings callout stacked on the last bar. The electric option the savings are
+  // measured against (efficientElectricValue) is always the final entry in
+  // APPLIANCE_OPTIONS, so the callout belongs on the last bar — the same
+  // arrangement as chart 1, where it sits on the electric column.
+  //
+  // Shows the total and the per-year average, exactly as chart 1 does, with the
+  // fossil baseline named on the sub-line. savingsLines[0] is the headline
+  // baseline (gas, or petrol for a car); where a second exists (diesel) the
+  // reader can still take it off the bars, which carry their own totals.
+  const savingsCallout = useMemo<SavingsCallout | undefined>(() => {
+    if (isSolarBattery || bars.length === 0 || savingsLines.length === 0) return undefined;
+    const headline = savingsLines[0];
+    // The comparator's own bar sets the callout height, so the box rises to the
+    // gas bar rather than to whatever happens to be tallest (usually LPG, which
+    // isn't what the saving is measured against). bars is built 1:1 from
+    // options, so the indices line up.
+    const baselineIdx = options.findIndex((o) => o.value === headline.fossilValue);
+    if (baselineIdx < 0) return undefined;
+    return {
+      barIndex: bars.length - 1,
+      amount: Math.abs(headline.value),
+      positive: headline.value > 0,
+      baselineLabel: headline.fossilLabel,
+      baselineTotal: bars[baselineIdx].cost.total,
+    };
+  }, [isSolarBattery, bars, options, savingsLines]);
+
+  // Two-line heading: what's being compared, then what the bars measure.
+  // Line 1 is the category ("Space heating"); line 2 the cost basis and horizon
+  // ("Total costs over 15 years").
+  const title = CATEGORIES.find((c) => c.value === category)?.label ?? category;
+  const horizon = `over ${years} year${years === 1 ? "" : "s"}`;
+  const subtitle = isSolarBattery
+    ? `Savings ${horizon}`
+    : isOneYear
+      ? "Operating costs at current prices"
+      : `${includeCapex ? "Total costs" : "Running costs"} ${horizon}`;
 
   // Household has no car when either count is 0 or vehicleOptions is empty
   // (defensive — these are kept in sync by ControlBox).
@@ -1022,15 +1036,7 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
         Compare a single appliance
       </Typography>
 
-      <Box
-        sx={{
-          display: "flex",
-          flexDirection: { xs: "column", md: "row" },
-          gap: 2,
-          alignItems: "flex-start",
-        }}
-      >
-        <Box sx={{ flex: 1, minWidth: 0 }}>
+      <Box sx={{ minWidth: 0 }}>
           <Row label="Appliance">
             <ToggleButtonGroup
               size="small"
@@ -1096,17 +1102,6 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
               </Row>
             </>
           )}
-        </Box>
-
-        {!isSolarBattery && (
-          <SavingsBox
-            category={category as ApplianceCategory}
-            lines={savingsLines}
-            noCar={noCar}
-            years={years}
-            scenario={baseInputs.solarScenario}
-          />
-        )}
       </Box>
 
       <Box sx={{ mt: 2 }}>
@@ -1116,6 +1111,7 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
             solarKw={solarKw}
             batteryKwh={batteryKwh}
             title={title}
+            subtitle={subtitle}
             footer={
               <ChartFooter
                 category={category}
@@ -1128,7 +1124,21 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
         ) : (
           <ComparisonChart
             title={title}
+            subtitle={subtitle}
             bars={bars}
+            // Stacked on the final bar (the efficient-electric option, which is
+            // always last in APPLIANCE_OPTIONS) so it fills the headroom up to
+            // the tallest fossil bar — the same treatment chart 1 gets. Being
+            // drawn inside the chart SVG, it travels with the PNG export.
+            savingsCallout={savingsCallout}
+            // Drives the "/ yr avg" line in the callout — without it the chart
+            // would assume a 1-year horizon and drop the annual figure.
+            years={years}
+            // Only surfaces when there's no car to compare; otherwise the
+            // callout on the bar carries the savings.
+            headerPanel={
+              category === "Vehicles" && noCar ? <NoCarNote /> : undefined
+            }
             footer={
               <ChartFooter
                 category={category}

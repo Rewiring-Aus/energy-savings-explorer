@@ -3,7 +3,8 @@ import { Autocomplete, Box, MenuItem, Select, TextField, Typography, useTheme } 
 import rough from "roughjs";
 import {
   DwellingType,
-  EvTariff,
+  getTariffSpec,
+  householdBreakdown,
   HouseInputs,
   Period,
   SolarScenario,
@@ -15,6 +16,9 @@ import {
   STATES,
   StateCode,
   STATE_LABELS,
+  Tariff,
+  TARIFFS,
+  TARIFF_LABELS,
   VEHICLE_CLASS_CHOICES,
   VEHICLE_CLASS_CHOICE_LABELS,
   VEHICLE_VARIANTS,
@@ -29,6 +33,7 @@ import {
   toVehicleOption,
 } from "src/comparison/data";
 import VehicleGraphic from "src/components/VehicleGraphic/VehicleGraphic";
+import { RA } from "src/theme/palette";
 
 interface Props {
   value: HouseInputs;
@@ -44,14 +49,17 @@ const VEHICLE_INTS = [0, 1, 2, 3];
 
 // Inline dropdown that sits inside a sentence. The Select is rendered as a
 // rough.js sketched pill — but the text itself uses the body font (Roboto)
-// to match the rest of the visualiser, with the orange ink + bold weight
-// keeping it visually distinct as a pickable choice.
-const HANDWRITTEN_COLOR = "#c2410c";  // warm rust orange
+// to match the rest of the visualiser, with the coloured ink + bold weight
+// keeping it visually distinct as a pickable choice. Near-black ink rather than
+// the previous rust orange: orange isn't in the RA palette, and a coloured ink
+// here competes with the charts for attention. The sketched pill and the bold
+// weight are what mark it as pickable, so the ink doesn't need to.
+const HANDWRITTEN_COLOR = RA.black;
 const INLINE_FONT = "Roboto, sans-serif";
 
 // Select sx — drops the CSS border / background / radius; the visible "pill"
 // is drawn as a rough.js sketched rectangle behind the Select (see
-// InlineSelect below). Keeps the cursive font + orange ink + chevron colour.
+// InlineSelect below). Keeps the ink + chevron colour.
 const inlineSelectSx = {
   fontFamily: INLINE_FONT,
   fontSize: "1rem",
@@ -332,14 +340,16 @@ const sentenceSx = {
 
 // Build a vehicleOptions array of the requested length, preserving the
 // user's existing per-car picks where possible and padding with a sensible
-// default (an "average new SUV" — distinct from the default first car so a
-// 2-car household reads "BYD hatchback and an average new SUV" out of the
-// box). When the count drops the array is truncated.
-const DEFAULT_NEW_CAR: VehicleOption = "suv_new";
+// default. The first car pads to the BYD Dolphin (matching DEFAULT_INPUTS)
+// and every car after it to the BYD Sealion, so a 2-car household reads
+// "BYD hatchback and a BYD SUV" out of the box rather than two identical
+// SUVs. When the count drops the array is truncated.
+const DEFAULT_FIRST_CAR: VehicleOption = "byd_dolphin";
+const DEFAULT_NEW_CAR: VehicleOption = "byd_sealion";
 function resizeVehicleOptions(current: VehicleOption[], length: number): VehicleOption[] {
   const next: VehicleOption[] = [];
   for (let i = 0; i < length; i++) {
-    next.push(current[i] ?? DEFAULT_NEW_CAR);
+    next.push(current[i] ?? (i === 0 ? DEFAULT_FIRST_CAR : DEFAULT_NEW_CAR));
   }
   return next;
 }
@@ -438,13 +448,13 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     value: lvl,
     label: DRIVING_LEVEL_LABELS[lvl],
   }));
-  const evTariffOptions: { value: EvTariff; label: string }[] = [
-    { value: "off_peak", label: "offpeak" },
-    { value: "ev",       label: "EV" },
-  ];
+  const tariffOptions: { value: Tariff; label: string }[] = TARIFFS.map((t) => ({
+    value: t,
+    label: TARIFF_LABELS[t],
+  }));
   const financeOptions = [
     { value: "cash" as const, label: "cash" },
-    { value: "loan" as const, label: "a loan (7%, 10yr)" },
+    { value: "loan" as const, label: "a loan (6%, 15yr)" },
   ];
   const periodOptions: { value: Period; label: string }[] = [
     { value: "1year", label: "1" },
@@ -455,6 +465,18 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     { value: "solar", label: "solar" },
     { value: "solar_optimised", label: "solar with smart timers on appliances" },
   ];
+
+  // Resolved tariff — Solar Sharer silently falls back to time-of-use outside
+  // the states that offer it, and that has to be visible rather than implied.
+  const tariffSpec = getTariffSpec(value.tariff, value.state, value.period);
+  const tariffFellBack = tariffSpec.tariff !== value.tariff;
+  // Free-window kWh/day is the most legible explanation of why Solar Sharer
+  // differs from the other plans, so surface it next to the selector.
+  const freeWindowKwhDay = tariffSpec.freeWindow
+    ? householdBreakdown(value, "electric").free.totalKwh
+    : 0;
+  const freeWindowBinding = tariffSpec.freeWindow
+    && householdBreakdown(value, "electric").free.scaleFactor < 1;
 
   const hasCar = vehicleCount > 0;
   const carPhrase = hasCar && vehicleCount === 1 ? "car" : "cars";
@@ -605,21 +627,43 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
         </Box>
       )}
 
-      {hasCar && (
+      {hasCar && !isGridOnly && (
         <Typography component="div" sx={sentenceSx}>
-          {chargedSubject} charged on{" "}
-          {!isGridOnly && (
-            <>solar and </>
-          )}
-          an{" "}
-          <InlineSelect
-            value={value.evTariff}
-            options={evTariffOptions}
-            onChange={(v: EvTariff) => set("evTariff", v)}
-          />{" "}
-          tariff.
+          {chargedSubject} charged on solar where possible.
         </Typography>
       )}
+
+      <Typography component="div" sx={sentenceSx}>
+        The house is on{" "}
+        <InlineSelect
+          value={value.tariff}
+          options={tariffOptions}
+          onChange={(v: Tariff) => set("tariff", v)}
+          width={"min(340px, 100%)"}
+        />
+        {tariffFellBack && (
+          // Solar Sharer isn't offered here, so the model silently used
+          // time-of-use. Say so rather than implying coverage.
+          <Box
+            component="span"
+            sx={{ fontStyle: "italic", color: "#8a6d3b", whiteSpace: "normal" }}
+          >
+            {" "}— not offered in {STATE_LABELS[value.state]}, so time-of-use is
+            used instead
+          </Box>
+        )}
+        .
+        {freeWindowKwhDay > 0 && (
+          <Box
+            component="span"
+            sx={{ display: "block", fontSize: "0.8rem", color: "#666", mt: 0.25 }}
+          >
+            About {freeWindowKwhDay.toFixed(1)} kWh a day of this household's use
+            can shift into the free 11am–2pm window
+            {freeWindowBinding ? " (capped at the 24 kWh daily limit)" : ""}.
+          </Box>
+        )}
+      </Typography>
 
       <Typography component="div" sx={sentenceSx}>
         Upgrades are paid for with{" "}

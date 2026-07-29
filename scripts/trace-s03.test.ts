@@ -15,15 +15,14 @@ import {
 import {
   APPLIANCE_CAPEX,
   BATTERY_COST_PER_KWH,
-  BATTERY_INSTALLATION_COST,
   FIT_BY_STATE,
-  FUEL_PRICES,
+  HEATER_COUNT_BY_STATE,
   INVERTER_REPLACEMENT_COST,
   SOLAR_PV_COST_PER_KW,
   SWITCHBOARD_UPGRADE_CAPEX,
   VEHICLE_OPTION_DATA,
-  VPP_ANNUAL_BENEFIT,
 } from "../src/comparison/data";
+import { getTariffSpec, vehicleEntries } from "../src/comparison/model";
 
 const SOLAR_KW = 10;
 const BATTERY_KWH = 15;
@@ -40,27 +39,33 @@ describe("S03 trace (AUS / 15yr cash / solar)", () => {
     const diag = wholeHomeBatteryDiagnostics(inputs);
     const sbCapex = solarBatteryCapex(inputs.state, SOLAR_KW, BATTERY_KWH, 15);
     const fit = FIT_BY_STATE[inputs.state];
-    const retail = FUEL_PRICES[inputs.state]!.electricity!.forecast15yr;
+    // Displaced grid kWh are worth the TARIFF's import rate, not the flat
+    // "electricity" row — and the supply charge comes from the tariff too.
+    const spec = getTariffSpec(inputs.tariff, inputs.state, inputs.period);
     const fitExportPerYear     = flows.fitExportKwhYr * fit;
-    const batteryToHomePerYear = flows.batteryToHomeKwhYr * retail;
-    const headroomPerYear      = diag.wholesaleAnnualValue;
-    const elecSupplyAnnual     = FUEL_PRICES[inputs.state]!.electricity!.daily15yr * 365;
+    const batteryToHomePerYear = flows.batteryToHomeKwhYr * spec.importDolKwh;
+    const batteryToEvPerYear   = flows.batteryToEvKwhYr * spec.evDolKwh;
+    const eveningExportPerYear = diag.eveningExportAnnualValue;
+    const elecSupplyAnnual     = spec.dailyCharge * 365;
 
+    // Heating capex scales by the state's typical heater count.
     const applianceCapex =
-      APPLIANCE_CAPEX.spaceHeatingHeatPump +
+      APPLIANCE_CAPEX.spaceHeatingHeatPump * HEATER_COUNT_BY_STATE[inputs.state] +
       APPLIANCE_CAPEX.waterHeatingHeatPump +
       APPLIANCE_CAPEX.cooktopInduction +
       SWITCHBOARD_UPGRADE_CAPEX;
-    const vehicleCapex = VEHICLE_OPTION_DATA[inputs.vehicleOption].evCapex * inputs.vehicles;
+    const vehicleCapex = vehicleEntries(inputs).reduce(
+      (sum, e) => sum + VEHICLE_OPTION_DATA[e.option].evCapex * e.weight, 0);
     const pvCapex = SOLAR_PV_COST_PER_KW[inputs.state] * SOLAR_KW + INVERTER_REPLACEMENT_COST;
-    const batteryCapex = BATTERY_COST_PER_KWH * BATTERY_KWH + BATTERY_INSTALLATION_COST;
+    // No install charge: the crew is already on site for the PV.
+    const batteryCapex = BATTERY_COST_PER_KWH * BATTERY_KWH;
     const totalCapex = applianceCapex + vehicleCapex + pvCapex + batteryCapex;
 
     console.log("===TS_S03_TRACE===");
     console.log("applianceCapex (HP+HW+ind+switchboard) =", Math.round(applianceCapex));
-    console.log("vehicleCapex (1.8 × BYD Dolphin EV)    =", Math.round(vehicleCapex));
+    console.log("vehicleCapex (household EV fleet)      =", Math.round(vehicleCapex));
     console.log("pvCapex (PV + replacement inverter)    =", Math.round(pvCapex));
-    console.log("batteryCapex (15 kWh + install)        =", Math.round(batteryCapex));
+    console.log("batteryCapex (15 kWh, no install)      =", Math.round(batteryCapex));
     console.log("solarBatteryCapex() (sanity)           =", Math.round(sbCapex));
     console.log("totalCapex                             =", Math.round(totalCapex));
     console.log("");
@@ -73,17 +78,21 @@ describe("S03 trace (AUS / 15yr cash / solar)", () => {
     console.log("solarGenerationKwhYr   =", Math.round(flows.solarGenerationKwhYr));
     console.log("solarSelfConsumedKwhYr =", Math.round(flows.solarSelfConsumedKwhYr));
     console.log("batteryToHomeKwhYr     =", Math.round(flows.batteryToHomeKwhYr));
+    console.log("batteryToEvKwhYr       =", Math.round(flows.batteryToEvKwhYr));
+    console.log("freeWindowKwhYr        =", Math.round(flows.freeWindowKwhYr));
     console.log("fitExportKwhYr         =", Math.round(flows.fitExportKwhYr));
     console.log("headroomKwhYr          =", Math.round(flows.headroomKwhYr));
     console.log("");
     console.log("--- per-year $ values ---");
     console.log("fitExportPerYear ($)       =", Math.round(fitExportPerYear));
     console.log("batteryToHomePerYear ($)   =", Math.round(batteryToHomePerYear));
-    console.log("headroom wholesalePerYear  =", Math.round(headroomPerYear));
+    console.log("batteryToEvPerYear ($)     =", Math.round(batteryToEvPerYear));
+    console.log("eveningExportPerYear ($)   =", Math.round(eveningExportPerYear));
     console.log("elecSupplyAnnual           =", Math.round(elecSupplyAnnual));
-    console.log("VPP_ANNUAL_BENEFIT (unused)=", VPP_ANNUAL_BENEFIT);
+    console.log("");
+    console.log("tariff (requested -> used) =", inputs.tariff, "->", spec.tariff);
     console.log("fit $/kWh                  =", fit);
-    console.log("retail $/kWh (15yr fcst)   =", retail);
+    console.log("import $/kWh (from tariff)  =", spec.importDolKwh);
     console.log("===END===");
   });
 });

@@ -1,20 +1,26 @@
 import { createTheme } from "@mui/material/styles";
+import { RA } from "./palette";
 
 const palette = {
   primary: {
-    main: "#FCEDC0",
+    main: RA.cream,
     // light: '#9d46ff', will be calculated from palette.primary.main
     // dark: '#0a00b6',
   },
   secondary: {
-    main: "#F0CF61",
+    main: RA.yellow,
   },
   error: {
+    // The RA palette has no red. Kept off-palette deliberately: this is a status
+    // colour, and "something is wrong" has to stay legible as red.
     main: "#EB5757", // '#b00020'
   },
   warning: {
-    main: "#e97840", // '#ff9800'
-    light: "#ffcac0",
+    // Was a rust orange, which isn't in the RA palette. Nothing consumes
+    // theme.palette.warning today — mapped onto brand yellow so that if
+    // something starts to, it lands on palette.
+    main: RA.yellow,
+    light: RA.cream,
   },
   info: {
     main: "#4A00C3",
@@ -31,8 +37,8 @@ const palette = {
     disabled: "#9e9e9e", // #BCBCBC
   },
   background: {
-    default: "#FFFBE7", // #527570
-    paper: "#ffffff",
+    default: RA.cream,
+    paper: RA.white,
   },
   divider: "#d7d5cd",
   action: {

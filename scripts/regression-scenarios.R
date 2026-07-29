@@ -8,12 +8,13 @@
 #   Rscript scripts/regression-scenarios.R
 #
 # Constants that must match TS data.ts (see scripts/REGRESSION.md):
-#   - household_safeguard_pct = 0.10
+#   - household_safeguard_pct = 0
 #   - solar_kwp = 10, battery_size_kwh = 15
-#   - loan_rate = 0.07, loan_term = 10
-#   - VPP membership = $300/yr  (R doesn't price VPP; TS Wholesale mode matches R)
-#   - EV dedicated tariff $0.08/kWh — set EV_OFF_PEAK_DOL_KWH below before sourcing
-#     the model, or add an "ev_off_peak" row at 0.08 to fuel_prices_by_state_simple.csv
+#   - loan_rate = 0.06, loan_term = 15
+#   - tariff = "solar_sharer", ev_tariff_share = 1
+#
+# The former electricity_tariff / ev_tariff / EV_OFF_PEAK_DOL_KWH knobs no
+# longer exist — one `tariff` argument replaces them (see get_tariff_spec).
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -21,19 +22,9 @@
 
 suppressPackageStartupMessages(library(tidyverse))
 
-# Override the EV dedicated tariff fallback BEFORE sourcing the model so it
-# picks up our value (the model uses this when fuel_prices CSV has no
-# "ev_off_peak" row). If R is later edited to read from CSV, remove this
-# block and update the CSV instead.
-EV_OFF_PEAK_DOL_KWH_OVERRIDE <- 0.08
-
 model_path <- "/Users/calumharvey-scholes/Library/CloudStorage/GoogleDrive-calum@rewiringaustralia.org/Shared drives/Rewiring Australia Shared Drive/Research/Projects/Energy savings 2026 Model/energy_savings_model.R"
 
 invisible(capture.output(source(model_path)))
-
-# Apply the EV tariff override (model file defines EV_OFF_PEAK_DOL_KWH = 0.05;
-# bump it to 0.08 to match TS data.ts EV_DEDICATED_DOL_KWH).
-assign("EV_OFF_PEAK_DOL_KWH", EV_OFF_PEAK_DOL_KWH_OVERRIDE, envir = .GlobalEnv)
 
 # ---------------------------------------------------------------------------
 # Shared defaults — mirror TS DEFAULT_INPUTS
@@ -41,21 +32,22 @@ assign("EV_OFF_PEAK_DOL_KWH", EV_OFF_PEAK_DOL_KWH_OVERRIDE, envir = .GlobalEnv)
 
 defaults <- list(
   state                   = "AUS",
-  n_occupants             = 2.7,
+  n_occupants             = 3,              # TS DEFAULT_INPUTS.occupants
   dwelling_type           = "house",
-  n_vehicles              = 1.8,
-  vehicle_class           = "Hatchback/small car",
-  new_used                = "New",          # BYD model lookup for hatchback => BYD Dolphin
+  n_vehicles              = 2,              # TS DEFAULT_INPUTS.vehicles
+  vehicle_class           = c("hatch", "SUV"), # TS [byd_dolphin, byd_sealion]
+  new_used                = "New",          # BYD model lookup => Dolphin / Sealion
   period                  = "15year",
   use_loan                = FALSE,
-  loan_rate               = 0.07,
-  loan_term               = 10,
+  loan_rate               = 0.06,           # TS DEFAULT_INPUTS.loanRate
+  loan_term               = 15,             # TS DEFAULT_INPUTS.loanTerm
   km_tier                 = "middle",
-  electricity_tariff      = "flat",
-  ev_tariff               = "ev_dedicated", # matches TS evTariff = "ev"
+  tariff                  = "solar_sharer", # TS DEFAULT_INPUTS.tariff
+  ev_tariff_share         = 1,              # TS EV_TARIFF_SHARE
+  battery_vpp             = FALSE,          # TS DEFAULT_INPUTS.batteryVpp
   solar_kwp               = 10,             # TS WHOLE_HOME_SOLAR_KW
   battery_size_kwh        = 15,             # TS WHOLE_HOME_BATTERY_KWH
-  household_safeguard_pct = 0.10            # TS BATTERY_HOUSEHOLD_SAFEGUARD_PCT
+  household_safeguard_pct = 0               # TS BATTERY_HOUSEHOLD_SAFEGUARD_PCT
 )
 
 # ---------------------------------------------------------------------------

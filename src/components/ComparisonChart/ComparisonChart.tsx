@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Typography, useTheme } from "@mui/material";
 import rough from "roughjs";
+import ChartExport from "src/components/ChartExport/ChartExport";
+import ChartLogo from "src/components/ChartLogo/ChartLogo";
+import { RA } from "src/theme/palette";
 import { HouseCost } from "src/comparison/model";
 
 export interface ChartBar {
@@ -10,6 +13,10 @@ export interface ChartBar {
 
 interface Props {
   title: string;
+  // Second heading line — what the bars measure, e.g. "Total costs over 15
+  // years", where the title names what's being compared. Folded into the export
+  // filename so downloads stay distinguishable.
+  subtitle?: string;
   // Small grey text rendered inside the chart card below the legend. Use it
   // for assumptions / definitions that frame the numbers (e.g. PV+battery
   // size on chart 1).
@@ -22,14 +29,35 @@ interface Props {
   // Used by the savings box to label and annualise totals (only relevant when
   // showSavingsBox is true).
   years?: number;
+  // Savings callout stacked on top of one specific bar, filling the headroom
+  // between that bar and the tallest one — the same treatment the 2-bar chart
+  // gets from showSavingsBox, for charts where the target bar has to be named.
+  savingsCallout?: SavingsCallout;
+  // Panel rendered beside the title, INSIDE the card. Anything passed here is
+  // part of the PNG/clipboard export, which is the point: the per-appliance
+  // savings call-out has to travel with the chart it describes. Sitting in the
+  // header rather than beside the bars leaves the bars the full card width.
+  // The title left-aligns when this is present (centred would collide with it)
+  // and stacks above the panel on narrow screens.
+  headerPanel?: React.ReactNode;
 }
 
+// Brand palette only — see src/theme/palette.ts for the validator findings.
+// The fuels sit at the two ends of the neutral range (grey for gas, black for
+// petrol) against the brand yellow for electricity, so the chart's central
+// contrast reads as fossil-dark vs electric-bright. Capital takes navy and
+// interest teal, keeping both finance lines off the fuel colours.
+//
+// Separation verified on ALL pairs (not just adjacent, since a zero segment can
+// make any two neighbours): worst ΔE 18.7 protan / 20.9 tritan, 22.1 normal.
+// The limiting pairs are yellow↔teal and grey↔navy; navy against black is
+// comfortably clear despite both being dark.
 const SEGMENT_COLORS = {
-  capital: "#4A00C3",      // deep purple — paid-down principal / cash capex
-  interest: "#444444",     // dark grey — finance interest
-  gas: "#e97840",          // orange — gas/LPG appliance fuel
-  petrol: "#8B3A1E",       // burgundy — petrol/diesel vehicle fuel
-  electricity: "#F0CF61",  // yellow — grid electricity
+  capital: RA.navy,        // paid-down principal / cash capex
+  interest: RA.teal,       // finance interest
+  gas: RA.gray,            // gas/LPG appliance fuel
+  petrol: RA.black,        // petrol/diesel vehicle fuel
+  electricity: RA.yellow,  // grid electricity
 };
 
 const SEGMENT_LABELS = {
@@ -88,6 +116,26 @@ interface SavingsAbove {
   amount: number;    // absolute value, always positive
   positive: boolean; // true = "Savings from electrifying", false = "Cost of electrifying"
   years: number;
+  // What the saving is measured against, e.g. "gas". Replaces the "over N yrs"
+  // sub-line when supplied: on the appliance chart the baseline is the thing
+  // worth naming, since several fossil bars are on screen at once.
+  baselineLabel?: string;
+  // Explicit callout height. Defaults to the headroom up to the TALLEST bar,
+  // which is only right when the tallest bar is the comparator. On the appliance
+  // chart it usually isn't (LPG is typically dearest but gas is the comparator),
+  // so the caller passes the height that reaches the comparator instead — which
+  // makes the box's height a true picture of the saving.
+  heightPx?: number;
+}
+
+// Explicit savings callout stacked above one named bar. The 2-bar case
+// (`showSavingsBox`) derives its own from the bar difference; this is for charts
+// with more bars, where neither the target bar nor the comparator is inferable.
+export interface SavingsCallout extends Omit<SavingsAbove, "years" | "heightPx"> {
+  barIndex: number;
+  // Total of the bar the saving is measured against. Sets the callout's height,
+  // so it rises to the comparator's top rather than the chart's.
+  baselineTotal: number;
 }
 
 // Renders a complete chart column (savings-or-cost callout on top + stacked
@@ -96,9 +144,15 @@ interface SavingsAbove {
 // inside the callout — so the look is unified and the column width is one
 // source of truth (the SVG width), guaranteeing the callout matches the bar.
 //
-// Vertical layout, top → bottom:
-//   y = 0           savingsPx tall savings/cost rect (skipped if 0)
-//   y = savingsPx   bar segments stack upward from y = maxPx
+// Vertical layout, bottom → top:
+//   y = maxPx                    baseline; bar segments stack UPWARD from here
+//   y = barTop                   top of the bar stack (maxPx - totalPx)
+//   y = barTop - savingsPx       top of the savings/cost rect
+//
+// The callout is anchored to the BAR's top, not the SVG's, and grows upward from
+// it. That keeps its bottom edge flush against the bar however tall it is —
+// which matters because its height reaches the comparator bar, not necessarily
+// the tallest one.
 const RoughBarColumn: React.FC<{
   segments: RoughSegment[];
   totalPx: number;
@@ -110,8 +164,11 @@ const RoughBarColumn: React.FC<{
   const [width, setWidth] = useState(0);
   const [hover, setHover] = useState<HoverState | null>(null);
 
-  const savingsPx =
-    savingsAbove && savingsAbove.amount > 0 ? Math.max(maxPx - totalPx, 0) : 0;
+  // Height of the callout: the caller's explicit height when given (reaching the
+  // comparator bar), otherwise the headroom up to the tallest bar.
+  const savingsPx = savingsAbove && savingsAbove.amount > 0
+    ? Math.max(savingsAbove.heightPx ?? maxPx - totalPx, 0)
+    : 0;
 
   useEffect(() => {
     if (!wrapRef.current) return;
@@ -129,17 +186,21 @@ const RoughBarColumn: React.FC<{
     const rc = rough.svg(svg);
     const ns = "http://www.w3.org/2000/svg";
 
-    // ---- Savings/cost callout rectangle (top of SVG) ----------------------
+    // ---- Savings/cost callout rectangle (sits on top of the bar) -----------
     if (savingsAbove && savingsPx > 0) {
       const { amount, positive, years } = savingsAbove;
       const bgFill = positive ? "#e8f5e9" : "#fdecea";
       const strokeColor = positive ? "#2e7d32" : "#c62828";
       const fgColor = positive ? "#1b5e20" : "#b71c1c";
-      // Inset the rect by 2 px so the rough stroke isn't clipped at the SVG
-      // edges. The bottom edge butts directly against the top of the bar
-      // segments — no negative margin trickery needed.
+      // Anchor the bottom edge to the top of the bar stack and grow upward, so
+      // the box always butts against the bar. Clamped at `inset` so the rough
+      // stroke isn't clipped when the box reaches the top of the SVG (which is
+      // what happens on the 2-bar chart, where it does span the full headroom).
       const inset = 2;
-      const rect = rc.rectangle(inset, inset, width - inset * 2, savingsPx - inset, {
+      const barTop = Math.max(maxPx - totalPx, 0);
+      const boxTop = Math.max(barTop - savingsPx, inset);
+      const boxH = Math.max(barTop - boxTop, 0);
+      const rect = rc.rectangle(inset, boxTop, width - inset * 2, boxH, {
         fill: bgFill,
         fillStyle: "solid",
         stroke: strokeColor,
@@ -154,37 +215,43 @@ const RoughBarColumn: React.FC<{
       // Headings are kept short (single word) so they fit the bar's column
       // width (~120-180 px). The full "Savings from electrifying" phrasing
       // wouldn't fit at 10 px font and was getting clipped on the right.
-      const showHeading = savingsPx >= 56;
-      const showSubheading = savingsPx >= 110 && years > 1;
+      // Naming the baseline ("vs gas") matters more than restating the horizon
+      // when other fossil bars are on screen, so it takes the sub-line when
+      // supplied — and then earns that line even on a 1-year view.
+      const subheadingText = savingsAbove.baselineLabel
+        ? `vs ${savingsAbove.baselineLabel}`
+        : years > 1 ? `over ${years} yrs` : "";
+      const showHeading = boxH >= 56;
+      const showSubheading = boxH >= 110 && subheadingText !== "";
       // Show the / yr average underneath the headline figure whenever there's
       // room for the heading too; the small typeface stays legible even in a
       // compact 56-px callout.
-      const showAnnual = savingsPx >= 56 && years > 1;
-      const amountSize = savingsPx >= 110 ? 26 : savingsPx >= 70 ? 22 : 18;
+      const showAnnual = boxH >= 56 && years > 1;
+      const amountSize = boxH >= 110 ? 26 : boxH >= 70 ? 22 : 18;
       const headingText = positive ? "SAVINGS" : "EXTRA COST";
-      const subheadingText = years > 1 ? `over ${years} yrs` : "";
 
-      // Vertical positions: distribute heading / sub / amount / per-year
-      // across the available rect height. y values stay below savingsPx so
-      // the per-year line never crosses into the bar segments underneath.
+      // Vertical positions: distribute heading / sub / amount / per-year across
+      // the rect's height. Fractions are OF THE BOX and offset by its top, so
+      // the text travels with the box instead of sticking to the SVG's top edge.
       const cx = width / 2;
+      const yAt = (f: number) => boxTop + boxH * f;
       const lines: { text: string; y: number; size: number; bold?: boolean }[] = [];
       if (showHeading && showSubheading) {
-        lines.push({ text: headingText, y: savingsPx * 0.18, size: 11, bold: true });
-        lines.push({ text: subheadingText, y: savingsPx * 0.36, size: 9 });
-        lines.push({ text: formatMoney(amount), y: savingsPx * 0.60, size: amountSize, bold: true });
+        lines.push({ text: headingText, y: yAt(0.18), size: 11, bold: true });
+        lines.push({ text: subheadingText, y: yAt(0.36), size: 9 });
+        lines.push({ text: formatMoney(amount), y: yAt(0.60), size: amountSize, bold: true });
         if (showAnnual) {
-          lines.push({ text: `${formatMoney(amount / years)} / yr avg`, y: savingsPx * 0.86, size: 10 });
+          lines.push({ text: `${formatMoney(amount / years)} / yr avg`, y: yAt(0.86), size: 10 });
         }
       } else if (showHeading && showAnnual) {
-        lines.push({ text: headingText, y: savingsPx * 0.22, size: 11, bold: true });
-        lines.push({ text: formatMoney(amount), y: savingsPx * 0.55, size: amountSize, bold: true });
-        lines.push({ text: `${formatMoney(amount / years)} / yr avg`, y: savingsPx * 0.85, size: 10 });
+        lines.push({ text: headingText, y: yAt(0.22), size: 11, bold: true });
+        lines.push({ text: formatMoney(amount), y: yAt(0.55), size: amountSize, bold: true });
+        lines.push({ text: `${formatMoney(amount / years)} / yr avg`, y: yAt(0.85), size: 10 });
       } else if (showHeading) {
-        lines.push({ text: headingText, y: savingsPx * 0.28, size: 11, bold: true });
-        lines.push({ text: formatMoney(amount), y: savingsPx * 0.68, size: amountSize, bold: true });
+        lines.push({ text: headingText, y: yAt(0.28), size: 11, bold: true });
+        lines.push({ text: formatMoney(amount), y: yAt(0.68), size: amountSize, bold: true });
       } else {
-        lines.push({ text: formatMoney(amount), y: savingsPx / 2, size: amountSize, bold: true });
+        lines.push({ text: formatMoney(amount), y: yAt(0.5), size: amountSize, bold: true });
       }
       for (const line of lines) {
         const t = document.createElementNS(ns, "text");
@@ -375,8 +442,11 @@ const Legend: React.FC = () => (
   </Box>
 );
 
-const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox, years = 1 }) => {
+const ComparisonChart: React.FC<Props> = ({
+  title, subtitle, footer, bars, showSavingsBox, years = 1, savingsCallout, headerPanel,
+}) => {
   const theme = useTheme();
+  const cardRef = useRef<HTMLDivElement | null>(null);
   // Y-axis is the actual peak across columns — the tallest bar fills the
   // chart, every other bar scales against the same reference.
   const maxTotal = Math.max(...bars.map((b) => b.cost.total), 1);
@@ -394,23 +464,65 @@ const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox,
   // column when electric is dearer. Whichever bar is shorter gets the box.
   const shorterIdx =
     showSavings && bars[1].cost.total < bars[0].cost.total ? 1 : 0;
-  const savingsForBar = (i: number) =>
-    showSavings && savings !== 0 && i === shorterIdx
+  const barPx = (total: number) =>
+    maxTotal > 0 ? (total / maxTotal) * chartHeight : 0;
+
+  const savingsForBar = (i: number): SavingsAbove | undefined => {
+    // An explicit callout wins — the caller knows which bar it belongs to.
+    if (savingsCallout) {
+      if (savingsCallout.barIndex !== i || savingsCallout.amount === 0) return undefined;
+      // Rise to the comparator's top, not the chart's.
+      const { baselineTotal, ...rest } = savingsCallout;
+      return {
+        ...rest,
+        years,
+        heightPx: Math.max(barPx(baselineTotal) - barPx(bars[i].cost.total), 0),
+      };
+    }
+    return showSavings && savings !== 0 && i === shorterIdx
       ? { amount: Math.abs(savings), positive: savings > 0, years }
       : undefined;
+  };
 
   return (
     <Box
+      ref={cardRef}
       sx={{
+        position: "relative",
         padding: "1.5rem",
         backgroundColor: theme.palette.background.paper,
         border: "1px solid #d7d5cd",
         borderRadius: 1,
       }}
     >
-      <Typography variant="h2" sx={{ textAlign: "center", mt: 0 }}>
-        {title}
-      </Typography>
+      <ChartExport
+        targetRef={cardRef}
+        filename={subtitle ? `${title} — ${subtitle}` : title}
+      />
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: { xs: "column", md: "row" },
+          alignItems: { md: "flex-start" },
+          justifyContent: "space-between",
+          gap: 2,
+        }}
+      >
+        <Box sx={{ flex: 1, minWidth: 0, textAlign: headerPanel ? "left" : "center" }}>
+          <Typography variant="h2" sx={{ mt: 0, mb: 0 }}>
+            {title}
+          </Typography>
+          {subtitle && (
+            <Typography
+              variant="h3"
+              sx={{ mt: 0.25, mb: 0, fontWeight: 500, color: "#555" }}
+            >
+              {subtitle}
+            </Typography>
+          )}
+        </Box>
+        {headerPanel}
+      </Box>
       <Box
         sx={{
           display: "flex",
@@ -432,12 +544,23 @@ const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox,
         ))}
       </Box>
       <Legend />
-      {footer && (
+      {/* Captions on the left, brand mark on the right. Both sit inside the
+          card, so an exported PNG carries the assumptions AND its attribution. */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 2,
+          mt: 1.5,
+        }}
+      >
         <Typography
           variant="caption"
           sx={{
             display: "block",
-            mt: 1.5,
+            flex: 1,
+            minWidth: 0,
             color: "#666",
             fontSize: "0.78rem",
             lineHeight: 1.4,
@@ -445,7 +568,8 @@ const ComparisonChart: React.FC<Props> = ({ title, footer, bars, showSavingsBox,
         >
           {footer}
         </Typography>
-      )}
+        <ChartLogo />
+      </Box>
     </Box>
   );
 };

@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from "react";
 import {
   Box,
+  Checkbox,
+  FormControlLabel,
   Link,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
   useTheme,
 } from "@mui/material";
@@ -11,12 +11,18 @@ import ControlBox from "src/components/ControlBox/ControlBox";
 import ComparisonChart from "src/components/ComparisonChart/ComparisonChart";
 import SingleApplianceSection from "src/components/SingleApplianceSection/SingleApplianceSection";
 import {
-  BatteryValueMode,
   DEFAULT_INPUTS,
   HouseInputs,
   compareHouses,
   wholeHomeBatteryDiagnostics,
 } from "src/comparison/model";
+import { TARIFF_LABELS } from "src/comparison/data";
+import {
+  assumptionsLine,
+  dwellingNoun,
+  householdLine,
+  placeTitle,
+} from "src/comparison/summary";
 import "./Home.css";
 
 const formatKwh = (n: number) =>
@@ -65,20 +71,34 @@ const Home: React.FC = () => {
       >
         <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
           <ComparisonChart
-            title={(() => {
-              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
-              return result.years === 1
-                ? `Whole ${noun} — 1 year operating cost (current prices)`
-                : `Whole ${noun} — total cost over ${result.years} years`;
-            })()}
+            title={
+              result.years === 1
+                ? `${placeTitle(inputs)} — 1 year operating cost (current prices)`
+                : `${placeTitle(inputs)} — total cost over ${result.years} years`
+            }
             footer={(() => {
-              const noun = inputs.dwelling === "apartment" ? "apartment" : "house";
+              const noun = dwellingNoun(inputs);
               // Numbers pronounced starting with a vowel take "an": 8 (eight),
               // 11 (eleven), 18 (eighteen), and any multiple starting with
               // those digits (80, 800, 1800…). All other leading digits → "a".
               const s = String(batteryDiag.batteryKwh);
               const battArticle = /^(8|11|18)/.test(s) ? "an" : "a";
-              return `The all-electric ${noun} has ${batteryDiag.solarKw} kW of rooftop solar and ${battArticle} ${batteryDiag.batteryKwh} kWh battery. Electricity costs include costs and credits.`;
+              return (
+                <>
+                  <Box component="span" sx={{ display: "block", fontWeight: 600, color: "#444" }}>
+                    {householdLine(inputs)}
+                  </Box>
+                  <Box component="span" sx={{ display: "block" }}>
+                    {assumptionsLine(inputs, {
+                      solarKw: batteryDiag.solarKw,
+                      batteryKwh: batteryDiag.batteryKwh,
+                    })}
+                  </Box>
+                  <Box component="span" sx={{ display: "block", mt: 0.5 }}>
+                    {`The all-electric ${noun} has ${batteryDiag.solarKw} kW of rooftop solar and ${battArticle} ${batteryDiag.batteryKwh} kWh battery. Electricity costs include costs and credits.`}
+                  </Box>
+                </>
+              );
             })()}
             bars={[
               {
@@ -109,39 +129,24 @@ const Home: React.FC = () => {
               marginTop: "-1px", // join visually to the bottom of the chart card
             }}
           >
-            <Typography
-              variant="overline"
-              sx={{ fontWeight: 600, color: "#444", lineHeight: 1.4 }}
-            >
-              Battery export
-            </Typography>
-            <ToggleButtonGroup
-              size="small"
-              exclusive
-              value={inputs.batteryValue}
-              onChange={(_, v: BatteryValueMode | null) => v && setInputs({ ...inputs, batteryValue: v })}
-              sx={{
-                "& .MuiToggleButton-root": {
-                  textTransform: "none",
-                  padding: "0.2rem 0.6rem",
-                  fontSize: "0.8rem",
-                  borderColor: "#d7d5cd",
-                  "&.Mui-selected": {
-                    backgroundColor: "#222222",
-                    color: "#fff",
-                    "&:hover": { backgroundColor: "#000" },
-                  },
-                },
-              }}
-            >
-              <ToggleButton value="self_consume">Self-consume</ToggleButton>
-              <ToggleButton value="vpp">VPP</ToggleButton>
-              <ToggleButton value="wholesale">Wholesale</ToggleButton>
-            </ToggleButtonGroup>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={inputs.batteryVpp}
+                  onChange={(e) => setInputs({ ...inputs, batteryVpp: e.target.checked })}
+                  sx={{ padding: "0.2rem 0.4rem" }}
+                />
+              }
+              label="Enrolled in a VPP"
+              slotProps={{ typography: { sx: { fontSize: "0.8rem" } } }}
+            />
             <Typography
               sx={{ fontSize: "0.72rem", color: "#666", flexBasis: "100%", lineHeight: 1.3 }}
             >
-              How a battery's exports are valued (applies when scenario is Solar / Solar optimised).
+              VPP enrolment unlocks the NSW and WA battery rebates. How battery
+              exports are <em>valued</em> now follows from the household's tariff
+              — set that in the panel on the right.
             </Typography>
             <Box
               sx={{
@@ -212,6 +217,18 @@ const Home: React.FC = () => {
                     mt: 0.4,
                   }}
                 >
+                  <span>Tariff (requested → used):</span>
+                  <strong>
+                    {TARIFF_LABELS[batteryDiag.requestedTariff]}
+                    {batteryDiag.resolvedTariff !== batteryDiag.requestedTariff && (
+                      <> → {TARIFF_LABELS[batteryDiag.resolvedTariff]} (not offered here)</>
+                    )}
+                  </strong>
+                  <span>Free window kWh/day (of {batteryDiag.freeWindowCapKwhPerDay} cap):</span>
+                  <strong>
+                    {batteryDiag.freeWindowKwhPerDay.toFixed(2)}
+                    {batteryDiag.freeWindowBinding && " — cap binding"}
+                  </strong>
                   <span>PV generation / self-consumption / battery charge / export kWh/yr:</span>
                   <strong>
                     {formatKwh(batteryDiag.solarGenerationKwhPerYear)} /{" "}
@@ -224,29 +241,21 @@ const Home: React.FC = () => {
                     {formatKwh(batteryDiag.batteryChargeKwhPerYear)} /{" "}
                     {formatKwh(batteryDiag.batteryDischargeKwhPerYear)}
                   </strong>
-                  <span>Headroom kWh/yr (battery → grid surplus):</span>
-                  <strong>{formatKwh(batteryDiag.headroomKwhPerYear)}</strong>
-                  <span>FiT / Wholesale rates:</span>
+                  <span>Stored solar → home / EV / evening export kWh/yr:</span>
                   <strong>
-                    {formatPriceKwh(batteryDiag.fitPriceKwh)} / {formatPriceKwh(batteryDiag.wholesalePriceKwh)}
+                    {formatKwh(batteryDiag.batteryToHomeKwhPerYear)} /{" "}
+                    {formatKwh(batteryDiag.batteryToEvKwhPerYear)} /{" "}
+                    {formatKwh(batteryDiag.headroomKwhPerYear)}
                   </strong>
-                  <span style={{ color: inputs.batteryValue === "self_consume" ? "#000" : "#666" }}>
-                    Self-consume value (no battery export):
-                  </span>
-                  <strong style={{ color: inputs.batteryValue === "self_consume" ? "#000" : "#666" }}>
-                    {formatDollars(batteryDiag.selfConsumeAnnualValue)}/yr
+                  <span>Import / FiT rates:</span>
+                  <strong>
+                    {formatPriceKwh(batteryDiag.importPriceKwh)} /{" "}
+                    {formatPriceKwh(batteryDiag.fitPriceKwh)}
                   </strong>
-                  <span style={{ color: inputs.batteryValue === "vpp" ? "#000" : "#666" }}>
-                    VPP value (flat membership):
-                  </span>
-                  <strong style={{ color: inputs.batteryValue === "vpp" ? "#000" : "#666" }}>
-                    {formatDollars(batteryDiag.vppAnnualValue)}/yr
-                  </strong>
-                  <span style={{ color: inputs.batteryValue === "wholesale" ? "#000" : "#666" }}>
-                    Wholesale value (headroom × wholesale):
-                  </span>
-                  <strong style={{ color: inputs.batteryValue === "wholesale" ? "#000" : "#666" }}>
-                    {formatDollars(batteryDiag.wholesaleAnnualValue)}/yr
+                  <span>Evening export (blended rate × volume):</span>
+                  <strong>
+                    {formatPriceKwh(batteryDiag.eveningExportPriceKwh)} ={" "}
+                    {formatDollars(batteryDiag.eveningExportAnnualValue)}/yr
                   </strong>
                 </Box>
               )}

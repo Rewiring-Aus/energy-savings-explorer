@@ -30,9 +30,63 @@ diff <(sed -n '/===BEGIN_TS_REGRESSION_CSV===/,/===END_TS_REGRESSION_CSV===/p' /
 | S10 | AUS apartment / 1 occ / 15yr cash / solar        |
 
 All other settings are TS `DEFAULT_INPUTS`:
-1.8 BYD Dolphin (hatchback, new), 200–300 km/wk, EV tariff,
-wholesale battery valuation, 10 kW solar + 15 kWh battery preset,
-7% / 10-yr loan.
+3 occupants, 2 cars (BYD Dolphin + BYD Sealion), 200–300 km/wk,
+`tariff` = `solar_sharer`, `EV_TARIFF_SHARE` = 1, 10 kW solar +
+15 kWh battery preset, 6% / 15-yr loan, safeguard 0.
+
+## Current status (last run: 2026-07-29, after the tariff refactor)
+
+All scenarios agree within $1–15 over 15 years (rounding), except S10.
+
+S10 (apartment) differs by design: TS scales the whole-home system down to
+5 kW / 8 kWh for apartments via `wholeHomePreset()`, R does not. Expect a
+~$1,250 gap on that row; it is intentional, not drift.
+
+## Second harness: `scripts/tariff-invariants.test.ts`
+
+The CSV diff only covers `tariff = solar_sharer`. `tariff-invariants.test.ts`
+pins the full 4 × 3 tariff × solar-scenario matrix for the reference household
+from `TARIFF_PORT_TO_TS.md` §7 (AUS, 2.7 occupants, SUV + hatch, 6%/15-yr loan,
+10 kW + 15 kWh, safeguard 0), verified against `evaluate_household()` to within
+$1/yr on every cell:
+
+| tariff | grid_only | solar | solar_optimised |
+|---|---|---|---|
+| flat | 2,717 | 3,560 | 3,959 |
+| tou | 3,294 | 3,541 | 3,839 |
+| amber | 3,294 | 3,541 | 3,839 |
+| solar_sharer | 3,532 | 4,222 | 4,519 |
+
+(annual savings vs gas, $/yr)
+
+It also asserts the structural invariants that are easy to silently break:
+
+- `solar_optimised` ≥ `solar` on **every** tariff. Dispatching solar before the
+  free window makes these two cannibalise each other (both are $0) while
+  stripping the battery of stored energy — a real loss — which flips the sign.
+- `amber` == `tou` on imports, supply charge and the gas side; they differ only
+  in the value of evening exports.
+- Free-window kWh must not move when solar changes *within* a scenario (it
+  legitimately changes across scenarios, because the `sso_` column changes).
+- Stored solar partitions exactly three ways: house load + EV + evening export
+  == `storedSolar × (1 - safeguard)`. The export leg is the residual and must
+  never be dropped.
+- The battery is never credited for more kWh than were actually billed — the
+  eligible load must be net of free-window kWh and the `min_retail` floor.
+- Solar Sharer eligibility is derived from the price rows, not hardcoded, and
+  falls back to `tou` in VIC/WA/TAS/NT.
+
+> **Note on §7 of `TARIFF_PORT_TO_TS.md`:** its `net_annual_opex` table lists
+> `solar_sharer` as "~2,674" for both `solar` and `solar_optimised`, described as
+> a "~$0 gap". That row is stale — R returns 2,667 / 2,369, and the doc's own
+> savings table (4,222 vs 4,519) implies exactly the $297 gap those figures
+> produce. Trust the savings table.
+
+Watch `batteryCapacityFactor()` in `model.ts`. Battery capacity must be
+time-AVERAGED over the horizon — `(1 + (1-d)^N) / 2`, matching
+`battery_model.R`'s `avg_capacity_factor`. Using the end-of-life value
+`(1-d)^N` instead shrinks the battery ~17% and silently under-credits every
+solar scenario by $1,000–3,100 over 15 years.
 
 ## Constants that must match R↔TS
 
@@ -41,14 +95,28 @@ whenever one model is edited:
 
 | Constant                       | TS                                | R                                                            |
 |--------------------------------|-----------------------------------|--------------------------------------------------------------|
-| Battery safeguard              | `BATTERY_HOUSEHOLD_SAFEGUARD_PCT` | `household_safeguard_pct` param of `evaluate_household`      |
-| EV dedicated tariff $/kWh      | `EV_DEDICATED_DOL_KWH` = 0.08     | `EV_OFF_PEAK_DOL_KWH` (the R script overrides to 0.08)       |
-| Loan rate                      | `DEFAULT_INPUTS.loanRate` = 0.07  | `loan_rate` param of `evaluate_household`                    |
-| Loan term                      | `DEFAULT_INPUTS.loanTerm` = 10    | `loan_term` param of `evaluate_household`                    |
-| PV array size                  | `WHOLE_HOME_SOLAR_KW` = 10        | `solar_kwp` param of `evaluate_household`                    |
-| Battery size                   | `WHOLE_HOME_BATTERY_KWH` = 15     | `battery_size_kwh` param of `evaluate_household`             |
-| VPP membership ($/yr)          | `VPP_ANNUAL_BENEFIT` = 300        | n/a — R has no VPP toggle; TS Wholesale mode aligns with R's tiered seasonal valuation |
-| Battery valuation mode (TS)    | `DEFAULT_INPUTS.batteryValue` = "wholesale" | matches R always-on tiered seasonal headroom                   |
+| Battery safeguard              | `BATTERY_HOUSEHOLD_SAFEGUARD_PCT` = 0 | `household_safeguard_pct` param of `evaluate_household` (function default is 0.20; the canonical comparisons run passes 0) |
+| Tariff                         | `DEFAULT_INPUTS.tariff` = "solar_sharer" | `tariff` param of `evaluate_household` (same default)   |
+| EV tariff share                | `EV_TARIFF_SHARE` = 1             | `ev_tariff_share` param (same default)                       |
+| Free-window cap (kWh/day)      | `SOLAR_SHARER_CAP_KWH_DAY` = 24   | `SOLAR_SHARER_CAP_KWH_DAY`                                   |
+| Solar Sharer states            | `SOLAR_SHARER_STATES` — derived from which states have an `electricity_sso_free` row | `SOLAR_SHARER_STATES` — derived the same way. **Neither side hardcodes this**, so adding VIC sso rows to the CSV needs no code change on either side (but the TS rows must be transcribed, see below) |
+| VPP enrolment                  | `DEFAULT_INPUTS.batteryVpp` = false | `battery_vpp` param (same default). Gates the NSW/WA battery subsidy only — it does **not** affect export pricing on either side |
+| Loan rate                      | `DEFAULT_INPUTS.loanRate` = 0.06  | `loan_rate` param of `evaluate_household`                    |
+| Loan term                      | `DEFAULT_INPUTS.loanTerm` = 15    | `loan_term` param of `evaluate_household`                    |
+| PV array size                  | `wholeHomePreset()` = 10 kW (house) | `solar_kwp` param of `evaluate_household`                  |
+| Battery size                   | `wholeHomePreset()` = 15 kWh (house) | `battery_size_kwh` param of `evaluate_household`          |
+| Per-load solar / free-window shares | `SOLAR_FRACTION_TABLE` in `model.ts` | `SOLAR_FRACTION_TABLE` in `energy_savings_model.R` — same shape, same rows, including the `sso_*` and `min_retail` columns |
+
+`VPP_ANNUAL_BENEFIT` is now unused by the model: R has no VPP revenue concept,
+and battery exports are valued by the tariff. It is left in `data.ts` because
+VPP's effect on export revenue is an open question to revisit.
+
+**The `sso` price rows are hand-transcribed into `data.ts`.** `SOLAR_SHARER_STATES`
+derives eligibility from those rows, so a state is only eligible in TS once its
+`electricity_sso_free` / `_off_peak` rows have been copied across from
+`fuel_prices_by_state_simple.csv`. Currently: ACT, AUS, NSW, QLD, SA.
+VIC has no sso rows in the CSV despite being an announced Solar Sharer
+jurisdiction — that is an upstream data gap, not a port omission.
 
 The R script sets the params explicitly at the top so the only edit needed
 when something moves is the `defaults` list in `scripts/regression-scenarios.R`.
