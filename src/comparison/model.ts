@@ -658,9 +658,22 @@ function vehicleClassFromOption(option: VehicleOption): VehicleClass {
 }
 
 // Normalise the per-car configuration to a list of {option, class, weight}.
-// Integer vehicle counts produce one entry per car with weight 1; the
-// fractional "average" preset (e.g. 1.8) produces a single entry whose
-// weight is the fractional count (energy + capex scale linearly).
+//
+// vehicleOptions describes the fleet's COMPOSITION (which cars) and `vehicles`
+// its SIZE. Every configured car is kept and the count is spread evenly across
+// them: weight = vehicles / options.length. So 2 cars over 2 options is one each,
+// and the 1.8 household average over those same 2 options is 0.9 each — the mix
+// is preserved and only the size changes. Energy, maintenance and capex all
+// scale linearly in weight, so a 0.9-weighted car is 90% of that car's costs.
+//
+// This replaces an earlier rule that special-cased fractional counts by keeping
+// ONLY the first configured car. That made "1.8 cars" mean "1.8 of car #1",
+// silently dropping the rest of the fleet — and since an SUV's EV costs ~$15.5k
+// more than its petrol equivalent while a hatchback's costs ~$30 more, dropping
+// an SUV removed nearly all of the electric fleet's capex penalty and pushed
+// savings UP by ~$1,000/yr as the household got SMALLER.
+//
+// Mirrors make_fleet() in energy_savings_model.R, which uses the same rule.
 export interface VehicleEntry {
   option: VehicleOption;
   vClass: VehicleClass;
@@ -673,17 +686,12 @@ export function vehicleEntries(inputs: HouseInputs): VehicleEntry[] {
   const opts = (inputs.vehicleOptions ?? []).filter((o) => o !== "no_car");
   if (opts.length === 0) return [];
 
-  if (!Number.isInteger(count)) {
-    const opt = opts[0];
-    return [{ option: opt, vClass: vehicleClassFromOption(opt), weight: count }];
-  }
-
-  const result: VehicleEntry[] = [];
-  for (let i = 0; i < count; i++) {
-    const opt = opts[i] ?? opts[opts.length - 1];
-    result.push({ option: opt, vClass: vehicleClassFromOption(opt), weight: 1 });
-  }
-  return result;
+  const weight = count / opts.length;
+  return opts.map((option) => ({
+    option,
+    vClass: vehicleClassFromOption(option),
+    weight,
+  }));
 }
 
 

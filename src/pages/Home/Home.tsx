@@ -8,7 +8,7 @@ import {
   useTheme,
 } from "@mui/material";
 import ControlBox from "src/components/ControlBox/ControlBox";
-import ComparisonChart from "src/components/ComparisonChart/ComparisonChart";
+import ComparisonChart, { SQUARE_WIDTH } from "src/components/ComparisonChart/ComparisonChart";
 import SingleApplianceSection from "src/components/SingleApplianceSection/SingleApplianceSection";
 import {
   DEFAULT_INPUTS,
@@ -71,6 +71,9 @@ const Home: React.FC = () => {
       >
         <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
           <ComparisonChart
+            // Two bars only, so a full-width card would be mostly margin — and
+            // that margin is what shows up as dead space in the exported PNG.
+            squarePx={SQUARE_WIDTH.house}
             title={
               result.years === 1
                 ? `${placeTitle(inputs)} — 1 year operating cost (current prices)`

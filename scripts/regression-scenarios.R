@@ -74,7 +74,12 @@ scenarios <- list(
   list(id = "S09", desc = "AUS no-car / 15yr cash / solar",
        o = list(n_vehicles = 0), solar = "solar"),
   list(id = "S10", desc = "AUS apartment / 1 occ / 15yr cash / solar",
-       o = list(dwelling_type = "apartment", n_occupants = 1), solar = "solar")
+       o = list(dwelling_type = "apartment", n_occupants = 1), solar = "solar"),
+  # Fractional vehicle count over the 2-car mixed fleet — see the TS comment.
+  # make_fleet() now spreads n_vehicles across vehicle_class instead of ignoring
+  # it for vectors, so 1.8 over c("hatch","SUV") is 0.9 each.
+  list(id = "S11", desc = "AUS 1.8 cars / 15yr cash / solar",
+       o = list(n_vehicles = 1.8), solar = "solar")
 )
 
 # R Gas scenario tag — NT uses LPG since there's no reticulated gas.

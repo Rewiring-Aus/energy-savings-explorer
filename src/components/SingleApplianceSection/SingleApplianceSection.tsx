@@ -9,7 +9,7 @@ import rough from "roughjs";
 import { assumptionsLine, householdLine } from "src/comparison/summary";
 import ChartExport from "src/components/ChartExport/ChartExport";
 import ChartLogo from "src/components/ChartLogo/ChartLogo";
-import ComparisonChart, { ChartBar, SavingsCallout } from "src/components/ComparisonChart/ComparisonChart";
+import ComparisonChart, { ChartBar, SavingsCallout, SQUARE_WIDTH } from "src/components/ComparisonChart/ComparisonChart";
 import { RA } from "src/theme/palette";
 import {
   ApplianceCategory,
@@ -1123,6 +1123,9 @@ const SingleApplianceSection: React.FC<Props> = ({ baseInputs }) => {
           />
         ) : (
           <ComparisonChart
+            // Squared off like chart 1, but at its own width: four bars and a
+            // longer caption block make it square a little wider.
+            squarePx={SQUARE_WIDTH.appliance}
             title={title}
             subtitle={subtitle}
             bars={bars}

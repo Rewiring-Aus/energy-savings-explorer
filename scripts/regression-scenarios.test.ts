@@ -35,6 +35,11 @@ const SCENARIOS: Scenario[] = [
   { id: "S08", description: "NT / 15yr cash / grid only (LPG)",   overrides: { finance: false, solarScenario: "grid_only", state: "NT" } },
   { id: "S09", description: "AUS no-car / 15yr cash / solar",     overrides: { finance: false, solarScenario: "solar", vehicleOptions: [], vehicles: 0 } },
   { id: "S10", description: "AUS apartment / 1 occ / 15yr cash / solar", overrides: { finance: false, solarScenario: "solar", dwelling: "apartment", occupants: 1 } },
+  // Fractional vehicle count over a 2-car mixed fleet — the case where TS and R
+  // used to diverge silently. TS scaled only car #1 (dropping the SUV, which
+  // inflated savings ~$1,000/yr); R ignored the count entirely. Both now spread
+  // the count across the configured mix, so this row must match.
+  { id: "S11", description: "AUS 1.8 cars / 15yr cash / solar", overrides: { finance: false, solarScenario: "solar", vehicles: 1.8 } },
 ];
 
 function round0(n: number): number {

@@ -29,6 +29,13 @@ interface Props {
   // Used by the savings box to label and annualise totals (only relevant when
   // showSavingsBox is true).
   years?: number;
+  // Caps the card at this width and tightens the bars to fill it, which for
+  // these charts means the card renders square. A chart in a full-width card is
+  // mostly margin, and that margin reads as dead space once it's a PNG in a
+  // deck; the export rasterises the card as laid out, so the fix belongs to the
+  // card rather than to anything capture-side. Pass a value from SQUARE_WIDTH —
+  // they're measured per content shape, not interchangeable.
+  squarePx?: number;
   // Savings callout stacked on top of one specific bar, filling the headroom
   // between that bar and the tallest one — the same treatment the 2-bar chart
   // gets from showSavingsBox, for charts where the target bar has to be named.
@@ -67,6 +74,33 @@ const SEGMENT_LABELS = {
   petrol: "Petrol / diesel",
   electricity: "Electricity",
 };
+
+// Widths at which each chart renders square, one per content shape.
+//
+// Card height FALLS as width rises, because the caption block rewraps to fewer
+// lines — so it's a step function, not a smooth one, and squareness is a single
+// width you find by measuring rather than compute. Both values below come from
+// sweeping width and reading back the height the export actually captures:
+//
+//   house      669 → 669  (exact; height plateaus at 669 across 640-760)
+//   appliance  766 → 768  (2 px out; height steps 804 → 768 → 750, and 768 is
+//                          the last width in the 768 band)
+//
+// Re-measure both if the caption block, legend or headings change materially.
+// The appliance chart is the wider of the two because it carries more caption
+// text and four bars; matching the house chart's 669 would have cost either
+// 135 px of bar height or most of the assumptions text.
+export const SQUARE_WIDTH = {
+  house: 669,
+  appliance: 766,
+} as const;
+
+// Bars are capped narrower than their column so a 2-bar chart doesn't look like
+// two slabs. In a square card that cap is what leaves the flanks empty, so it
+// goes up. It's a cap rather than a width, so it only binds when there's room:
+// two bars in 669 px take the full 236, four bars in 766 px land at ~173 and the
+// cap is simply inert.
+const SQUARE_BAR_MAX_PX = 236;
 
 type SegmentKey = keyof typeof SEGMENT_COLORS;
 const ORDER: SegmentKey[] = ["capital", "interest", "gas", "petrol", "electricity"];
@@ -158,7 +192,8 @@ const RoughBarColumn: React.FC<{
   totalPx: number;
   maxPx: number;
   savingsAbove?: SavingsAbove;
-}> = ({ segments, totalPx, maxPx, savingsAbove }) => {
+  barMaxPx?: number;
+}> = ({ segments, totalPx, maxPx, savingsAbove, barMaxPx = 180 }) => {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [width, setWidth] = useState(0);
@@ -356,7 +391,7 @@ const RoughBarColumn: React.FC<{
   return (
     <Box
       ref={wrapRef}
-      sx={{ width: "100%", maxWidth: 180, height: maxPx, position: "relative" }}
+      sx={{ width: "100%", maxWidth: barMaxPx, height: maxPx, position: "relative" }}
     >
       <svg ref={svgRef} width={width} height={maxPx} style={{ display: "block" }} />
       {hover && (
@@ -390,7 +425,8 @@ const Bar: React.FC<{
   maxTotal: number;
   maxPx: number;
   savingsAbove?: SavingsAbove;
-}> = ({ label, cost, maxTotal, maxPx, savingsAbove }) => {
+  barMaxPx?: number;
+}> = ({ label, cost, maxTotal, maxPx, savingsAbove, barMaxPx }) => {
   const totalPx = maxTotal > 0 ? (cost.total / maxTotal) * maxPx : 0;
   const segments: RoughSegment[] = ORDER
     .map((key) => ({ key, value: cost[key as keyof HouseCost] as number }))
@@ -419,6 +455,7 @@ const Bar: React.FC<{
         totalPx={totalPx}
         maxPx={maxPx}
         savingsAbove={savingsAbove}
+        barMaxPx={barMaxPx}
       />
     </Box>
   );
@@ -443,8 +480,10 @@ const Legend: React.FC = () => (
 );
 
 const ComparisonChart: React.FC<Props> = ({
-  title, subtitle, footer, bars, showSavingsBox, years = 1, savingsCallout, headerPanel,
+  title, subtitle, footer, bars, showSavingsBox, years = 1, savingsCallout,
+  headerPanel, squarePx,
 }) => {
+  const square = squarePx !== undefined;
   const theme = useTheme();
   const cardRef = useRef<HTMLDivElement | null>(null);
   // Y-axis is the actual peak across columns — the tallest bar fills the
@@ -493,6 +532,15 @@ const ComparisonChart: React.FC<Props> = ({
         backgroundColor: theme.palette.background.paper,
         border: "1px solid #d7d5cd",
         borderRadius: 1,
+        // Square mode: fix the width so the card renders square, and centre it
+        // in whatever column it's given. border-box so the measured width is the
+        // width including padding.
+        ...(square && {
+          boxSizing: "border-box",
+          width: "100%",
+          maxWidth: squarePx,
+          mx: "auto",
+        }),
       }}
     >
       <ChartExport
@@ -526,7 +574,7 @@ const ComparisonChart: React.FC<Props> = ({
       <Box
         sx={{
           display: "flex",
-          gap: { xs: 1, sm: 2 },
+          gap: square ? 1 : { xs: 1, sm: 2 },
           justifyContent: "center",
           alignItems: "flex-end",
           mt: 2,
@@ -540,6 +588,7 @@ const ComparisonChart: React.FC<Props> = ({
             maxTotal={maxTotal}
             maxPx={chartHeight}
             savingsAbove={savingsForBar(i)}
+            barMaxPx={square ? SQUARE_BAR_MAX_PX : undefined}
           />
         ))}
       </Box>

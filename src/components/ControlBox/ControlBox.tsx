@@ -55,6 +55,13 @@ const VEHICLE_INTS = [0, 1, 2, 3];
 // here competes with the charts for attention. The sketched pill and the bold
 // weight are what mark it as pickable, so the ink doesn't need to.
 const HANDWRITTEN_COLOR = RA.black;
+// The sketched pill outline, kept separate from the ink so the two can differ.
+// Brand yellow reads as the interactive affordance while the text stays black.
+// Yellow is only 1.48:1 against the panel, well under the 3:1 that non-text UI
+// contrast wants, so the stroke is drawn heavier than the ink's would be to keep
+// the pill's edge findable.
+const OUTLINE_COLOR = RA.yellow;
+const OUTLINE_WIDTH = 2.6;
 const INLINE_FONT = "Roboto, sans-serif";
 
 // Select sx — drops the CSS border / background / radius; the visible "pill"
@@ -124,8 +131,8 @@ function InlineSelect<T extends string | number>({
     // rectangle).
     const inset = 3;
     const rect = rc.rectangle(inset, inset, dims.w - inset * 2, dims.h - inset * 2, {
-      stroke: HANDWRITTEN_COLOR,
-      strokeWidth: 1.6,
+      stroke: OUTLINE_COLOR,
+      strokeWidth: OUTLINE_WIDTH,
       fill: "#fffaf3",
       fillStyle: "solid",
       roughness: 1.4,
@@ -236,8 +243,8 @@ function InlineCombo({
     const rc = rough.svg(svg);
     const inset = 3;
     const rect = rc.rectangle(inset, inset, dims.w - inset * 2, dims.h - inset * 2, {
-      stroke: HANDWRITTEN_COLOR,
-      strokeWidth: 1.6,
+      stroke: OUTLINE_COLOR,
+      strokeWidth: OUTLINE_WIDTH,
       fill: "#fffaf3",
       fillStyle: "solid",
       roughness: 1.4,
@@ -377,15 +384,22 @@ const ControlBox: React.FC<Props> = ({ value, onChange }) => {
     });
   };
 
-  // --- Vehicle count: 0 zeroes the options array; any positive value resizes
-  //     the array to the requested length, preserving prior picks. The
-  //     fractional "average" preset (1.8) collapses to a single shared car.
+  // --- Vehicle count: 0 zeroes the options array; a whole number resizes the
+  //     array to that many cars, preserving prior picks.
+  //
+  //     The fractional "average" preset (1.8) keeps the fleet as configured and
+  //     lets the model spread the count across it (see vehicleEntries) — 1.8
+  //     over two cars is 0.9 each. It used to truncate to a single car, which
+  //     threw away the user's other picks and, because vehicle classes differ
+  //     enormously in EV price premium, moved savings sharply the wrong way.
   const setVehicleCount = (count: number) => {
     if (count === 0) {
       onChange({ ...value, vehicles: 0, vehicleOptions: [] });
       return;
     }
-    const targetLength = Number.isInteger(count) ? count : 1;
+    const targetLength = Number.isInteger(count)
+      ? count
+      : Math.max(carEntries.length, 1);
     onChange({
       ...value,
       vehicles: count,

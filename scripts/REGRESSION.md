@@ -28,6 +28,7 @@ diff <(sed -n '/===BEGIN_TS_REGRESSION_CSV===/,/===END_TS_REGRESSION_CSV===/p' /
 | S08 | NT / 15yr cash / grid only (LPG fallback)        |
 | S09 | AUS no-car / 15yr cash / solar                   |
 | S10 | AUS apartment / 1 occ / 15yr cash / solar        |
+| S11 | AUS 1.8 cars / 15yr cash / solar                 |
 
 All other settings are TS `DEFAULT_INPUTS`:
 3 occupants, 2 cars (BYD Dolphin + BYD Sealion), 200–300 km/wk,
@@ -41,6 +42,14 @@ All scenarios agree within $1–15 over 15 years (rounding), except S10.
 S10 (apartment) differs by design: TS scales the whole-home system down to
 5 kW / 8 kWh for apartments via `wholeHomePreset()`, R does not. Expect a
 ~$1,250 gap on that row; it is intentional, not drift.
+
+S11 guards the fractional vehicle count, which the two models used to handle
+with different rules — TS branched on whether the count was a whole number and
+kept only car #1, R branched on whether `vehicle_class` was a vector and ignored
+the count outright. Every other row uses a whole-number count, where both rules
+happen to agree, so nothing caught it. Both now spread the count across the
+configured fleet (`weight = n_vehicles / length(vehicle_class)`), and S11 is the
+row that fails if either side drifts back. TS 81,029 vs R 81,024.
 
 ## Second harness: `scripts/tariff-invariants.test.ts`
 
