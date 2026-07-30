@@ -68,7 +68,7 @@ const SEGMENT_COLORS = {
 };
 
 const SEGMENT_LABELS = {
-  capital: "Capital",
+  capital: "Purchase cost",
   interest: "Interest",
   gas: "Gas / LPG",
   petrol: "Petrol / diesel",

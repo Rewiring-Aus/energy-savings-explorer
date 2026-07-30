@@ -53,6 +53,15 @@ async function captureCard(node: HTMLElement): Promise<Blob> {
     height,
     backgroundColor: "#ffffff",
     fontEmbedCSS,
+    // The square card is centred in its column with `margin: 0 auto`, which
+    // resolves to a real pixel value once the browser lays it out (however
+    // much space is free on either side). html-to-image freezes that resolved
+    // margin onto the clone, but the export canvas is sized to the card's OWN
+    // width with no room either side — so the frozen margin pushes the whole
+    // card sideways and everything past the middle gets clipped. Forcing the
+    // clone's margin back to 0 is what the live page gets "for free" from its
+    // wider container.
+    style: { margin: "0" },
     filter: (el: HTMLElement) =>
       !(el.dataset && el.dataset.exportExclude !== undefined),
   });
